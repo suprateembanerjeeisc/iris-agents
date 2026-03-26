@@ -1,0 +1,5 @@
+__pycache__/
+.env
+/legacy/
+.DS_Store
+.vscode/
