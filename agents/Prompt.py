@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import pandas as pd
+import string
 from .utils import get_connection
 
 load_dotenv()
@@ -64,7 +65,6 @@ class Prompt:
         return self.text or ''
 
     def build(self, **vars) -> str:
-        import string
         vars_req = {var for _, var, _, _ in string.Formatter().parse(self.text) if var}
         missing = vars_req - vars.keys()
         if missing:

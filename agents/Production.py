@@ -6,7 +6,7 @@ import os
 from .Toolkit import Toolkit
 from .Message import Message
 from .Agent import Agent
-from .models import LLMRequest, LLMResponse, ToolRequest, ToolResponse, Request, Response
+from .models import LLMRequest, LLMResponse, Request, Response
 from .utils import get_connection, create_class, ensure_common_utils, ensure_production_utils
 
 load_dotenv()
@@ -488,8 +488,6 @@ class Production:
 
         Message('LLMRequest', LLMRequest, 'Request')
         Message('LLMResponse', LLMResponse, 'Response')
-        Message('ToolRequest', ToolRequest, message_type='Request')
-        Message('ToolResponse', ToolResponse, message_type='Response')
         Message('Request', Request, message_type='Request')
         Message('Response', Response, 'Response')
 
@@ -588,11 +586,27 @@ class Production:
 
             Set sc = http.Post("/v1/responses")
             If $$$ISERR(sc) {{
-                Quit "{{""error"":""http_post_failed"",""detail"":"""_$SYSTEM.Status.GetErrorText(sc)_"""}}"
+                Set err = $SYSTEM.Status.GetErrorText(sc)
+                Set sslcfg = http.SSLConfiguration
+                Quit "{{""error"":""http_post_failed"",""detail"":"""_$ZCONVERT(err,"O","JSON")_""",""server"":"""_http.Server_""",""port"":"_http.Port_",""https"":"_http.Https_",""sslConfig"":"""_sslcfg_"""}}"
             }}
 
-            If '$IsObject(http.HttpResponse) Quit "{{""error"":""no_http_response""}}"
-            Quit ##class(Agents.Utils.Common).ToText(http.HttpResponse.Data)
+            If '$IsObject(http.HttpResponse) {{
+                Quit "{{""error"":""no_http_response""}}"
+            }}
+
+            Set statusCode = +http.HttpResponse.StatusCode
+            Set respBody = ##class(Agents.Utils.Common).ToText(http.HttpResponse.Data)
+
+            If (statusCode < 200) || (statusCode > 299) {{
+                Set obj = ##class(%DynamicObject).%New()
+                Do obj.%Set("error", "http_error")
+                Do obj.%Set("status_code", statusCode)
+                Do obj.%Set("detail", respBody)
+                Quit obj.%ToJSON()
+            }}
+
+            Quit respBody
         }}
 
 
@@ -615,6 +629,9 @@ class Production:
                 Set rawObj = ##class(%DynamicObject).%FromJSON(raw)
 
                 Set hasTopErr = 0
+                Set err = ""
+                Set detail = ""
+
                 If rawObj.%IsDefined("error") {{
                     Set err = rawObj.%Get("error")
                     If err'="" {{
@@ -622,8 +639,16 @@ class Production:
                     }}
                 }}
 
+                If rawObj.%IsDefined("detail") {{
+                    Set detail = rawObj.%Get("detail")
+                }}
+
                 If hasTopErr {{
-                    Set sc = $$$ERROR($$$GeneralError, "OpenAI returned error: "_##class(Agents.Utils.Common).ToJSONString(err))
+                    Set msg = "OpenAI returned error: "_err
+                    If detail'="" {{
+                        Set msg = msg_" | detail: "_detail
+                    }}
+                    Set sc = $$$ERROR($$$GeneralError, msg)
                     Set hasError = 1
                 }} ElseIf rawObj.%IsDefined("status") {{
                     Set respStatus = rawObj.%Get("status")
@@ -911,6 +936,42 @@ class Production:
             Class Agents.Admin
             {
 
+                ClassMethod EnsureTLSConfigForOpenAI(pName As %String = "OpenAI") As %Status
+                {
+                    Set oldNS = $Namespace
+                    Set $Namespace = "%SYS"
+                    Set sc = $$$OK
+
+                    Try {
+                        Kill props
+                        Set props("Description") = "TLS client config for OpenAI API"
+                        Set props("Enabled") = 1
+                        Set props("Type") = 0
+                        Set props("VerifyPeer") = 1
+                        Set props("CAFile") = "%OSCertificateStore"
+
+                        If ##class(Security.SSLConfigs).Exists(pName) {
+                            Set sc = ##class(Security.SSLConfigs).Modify(pName, .props)
+                        } Else {
+                            Set sc = ##class(Security.SSLConfigs).Create(pName, .props)
+                        }
+
+                        If $$$ISOK(sc) {
+                            Set cfg = ##class(Security.SSLConfigs).%OpenId(pName)
+                            If '$IsObject(cfg) {
+                                Set sc = $$$ERROR($$$GeneralError, "Unable to open TLS config "_pName)
+                            } Else {
+                                Set sc = cfg.Activate()
+                            }
+                        }
+                    } Catch ex {
+                        Set sc = ex.AsStatus()
+                    }
+
+                    Set $Namespace = oldNS
+                    Return sc
+                }
+
                 /// Returns the web application definition as JSON
                 ClassMethod GetWebAppJSON(pPath As %String) As %String
                 {
@@ -1016,6 +1077,14 @@ class Production:
             raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
         else:
             print(f'Created Web App successfully at /csp/agents/{self.name}')
+
+        # Set up TLSConfig
+
+        sc = irispy.classMethodValue("Agents.Admin", "EnsureTLSConfigForOpenAI", "OpenAI")
+        if sc != 1:
+            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+        else:
+            print("Configured TLS profile 'OpenAI'")
 
         # Set OpenAI API Key as Credential
 

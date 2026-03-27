@@ -5,16 +5,78 @@ import pandas as pd
 
 load_dotenv()
 
-def get_connection(obj=False) -> iris.IRIS | iris._elsdk_.IRISConnection:
-    args = {
-        'hostname':os.environ['IRIS_HOSTNAME'], 
-        'port': int(os.environ['IRIS_PORT']),
-        'namespace':'Agents', 
-        'username':os.environ['IRIS_USERNAME'], 
-        'password':os.environ['IRIS_PASSWORD']
-    }
-    conn = iris.connect(**args)
+import os
+from pathlib import Path
+import iris
+
+AGENTS_NAMESPACE = "Agents"
+
+def connect(namespace: str, obj: bool = False):
+    conn = iris.connect(
+        hostname=os.environ["IRIS_HOSTNAME"],
+        port=int(os.environ["IRIS_PORT"]),
+        namespace=namespace,
+        username=os.environ["IRIS_USERNAME"],
+        password=os.environ["IRIS_PASSWORD"],
+    )
     return iris.createIRIS(conn) if obj else conn
+
+
+def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
+    """
+    Bootstrap the target namespace from %SYS if it does not yet exist.
+    Also enable it for interoperability productions.
+    """
+    irispy = connect("%SYS", obj=True)
+
+    # already there?
+    exists = irispy.classMethodValue("%SYS.Namespace", "Exists", namespace)
+    if int(exists) == 1:
+        return
+
+    # CREATE DATABASE creates the namespace and its databases.
+    # Per IRIS docs, this creates the code/data DB structure for the namespace.
+    sql = f"CREATE DATABASE {namespace}"
+    rs = irispy.classMethodObject("%SQL.Statement", "%ExecDirect", "", sql)
+
+    # make it production-enabled / interoperability-enabled
+    sc = irispy.classMethodValue("%Library.EnsembleMgr", "EnableNamespace", namespace, 1)
+    if sc != 1:
+        raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+    
+def ensure_chat_table():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    sql = """
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.Tables
+            WHERE TABLE_TYPE='BASE TABLE'
+            AND TABLE_SCHEMA='SQLUser'
+        """
+    tables = pd.read_sql_query(sql, conn)["TABLE_NAME"].to_list()
+
+    if "Chat" not in tables:
+        cur.execute("""
+            CREATE TABLE Chat (
+                message_id INTEGER IDENTITY PRIMARY KEY,
+                id VARCHAR(200) NOT NULL,
+                message_role VARCHAR(50) NOT NULL,
+                message VARCHAR(50000) NOT NULL
+            )
+        """)
+        conn.commit()
+
+        try:
+            cur.execute("CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)")
+            conn.commit()
+        except Exception:
+            pass
+    
+
+def get_connection(obj=False):
+    ensure_agents_namespace("Agents")
+    return connect("Agents", obj=obj)
 
 def create_class(cls_name: str, cls_text: str) -> None:
     irispy = get_connection(True)
@@ -234,6 +296,9 @@ def ensure_common_utils():
     create_class('Agents.Utils.Common', cls_text)
 
 def ensure_production_utils():
+
+    ensure_chat_table()
+    
     cls_text = f'''Class Agents.Utils.Production Extends %RegisteredObject
     {{
         ClassMethod BuildNextLLMChatJSON(

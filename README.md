@@ -55,7 +55,7 @@ This project provides an effective way to:
   conda activate irisagents
   pip install -r requirements.txt
   ```
-- Create a `.env` file similar to this
+- Create a `.env` file similar to this (Note the port is the superserver port)
   ```
   OPENAI_API_KEY="sk..."
   IRIS_HOSTNAME=localhost

@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from .utils import create_class
 from .models import MessageType
 
-
 class Message:
 
     def __init__(self, name: str, model: type[BaseModel], message_type: str):
@@ -35,25 +34,24 @@ class Message:
         }
 
         built: set[str] = set()
-        pending: list[tuple[str, dict[str, Any], bool]] = [(self.name, schema, True)]
 
-        while pending:
-            class_name, class_schema, top_level = pending.pop()
-
+        def compile_schema(class_name: str, class_schema: dict[str, Any], top_level: bool) -> None:
             if class_name in built:
-                continue
-            built.add(class_name)
+                return
 
             properties = class_schema.get("properties", {})
             if not isinstance(properties, dict):
                 raise ValueError(f"Schema for {class_name} is not an object schema")
 
+            lines: list[str] = []
             parent = f'Ens.{self.type}, %JSON.Adaptor' if top_level else '%SerialObject, %JSON.Adaptor'
             cls_name = f'Agents.Message.{class_name}'
-            lines: list[str] = [f'Class {cls_name} Extends ({parent})', '{']
+            lines.append(f'Class {cls_name} Extends ({parent})')
+            lines.append('{')
+
+            deferred_props: list[str] = []
 
             for prop_name, prop_schema in properties.items():
-
                 if "anyOf" in prop_schema:
                     non_null = [x for x in prop_schema["anyOf"] if x.get("type") != "null"]
                     if len(non_null) == 1:
@@ -67,8 +65,8 @@ class Message:
                         raise ValueError(f"Unsupported schema ref: {ref}")
                     nested_name = ref.split("/")[-1]
 
-                    pending.append((nested_name, defs[nested_name], False))
-                    lines.append(
+                    compile_schema(nested_name, defs[nested_name], False)
+                    deferred_props.append(
                         f'Property {iris_name} As Agents.Message.{nested_name}(%JSONFIELDNAME = "{prop_name}");'
                     )
                     continue
@@ -77,8 +75,8 @@ class Message:
 
                 if prop_type == "object":
                     inline_class_name = f"{class_name}{iris_name}"
-                    pending.append((inline_class_name, prop_schema, False))
-                    lines.append(
+                    compile_schema(inline_class_name, prop_schema, False)
+                    deferred_props.append(
                         f'Property {iris_name} As Agents.Message.{inline_class_name}(%JSONFIELDNAME = "{prop_name}");'
                     )
                     continue
@@ -97,8 +95,8 @@ class Message:
                             raise ValueError(f"Unsupported schema ref: {ref}")
                         nested_name = ref.split("/")[-1]
 
-                        pending.append((nested_name, defs[nested_name], False))
-                        lines.append(
+                        compile_schema(nested_name, defs[nested_name], False)
+                        deferred_props.append(
                             f'Property {iris_name} As list Of Agents.Message.{nested_name}(%JSONFIELDNAME = "{prop_name}");'
                         )
                         continue
@@ -107,8 +105,8 @@ class Message:
 
                     if item_type == "object":
                         inline_class_name = f"{class_name}{iris_name}Item"
-                        pending.append((inline_class_name, items, False))
-                        lines.append(
+                        compile_schema(inline_class_name, items, False)
+                        deferred_props.append(
                             f'Property {iris_name} As list Of Agents.Message.{inline_class_name}(%JSONFIELDNAME = "{prop_name}");'
                         )
                         continue
@@ -119,7 +117,7 @@ class Message:
                     else:
                         scalar_expr = f'{scalar_iris}(%JSONFIELDNAME = "{prop_name}")'
 
-                    lines.append(f'Property {iris_name} As list Of {scalar_expr};')
+                    deferred_props.append(f'Property {iris_name} As list Of {scalar_expr};')
                     continue
 
                 scalar_iris = scalar_type_map.get(prop_type, '%String(MAXLEN = "")')
@@ -128,7 +126,12 @@ class Message:
                 else:
                     scalar_expr = f'{scalar_iris}(%JSONFIELDNAME = "{prop_name}")'
 
-                lines.append(f'Property {iris_name} As {scalar_expr};')
+                deferred_props.append(f'Property {iris_name} As {scalar_expr};')
 
+            lines.extend(deferred_props)
             lines.append('}')
+
             create_class(cls_name, '\n'.join(lines))
+            built.add(class_name)
+
+        compile_schema(self.name, schema, True)
