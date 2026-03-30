@@ -1,9 +1,9 @@
 from typing import Dict
 import uuid
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # json_response=True ensures tool results are returned as JSON payloads
-mcp = FastMCP("Utility Server", json_response=True)
+mcp = FastMCP("Utility Server")
 
 
 @mcp.tool()
@@ -26,4 +26,11 @@ def calendar() -> Dict[str, str]:
 
 if __name__ == "__main__":
     # Exposes Streamable HTTP at http://localhost:8000/mcp by default
-    mcp.run(transport="streamable-http")
+    # mcp.run(transport="streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=9001,
+        path="/mcp",
+        json_response=True
+    )
