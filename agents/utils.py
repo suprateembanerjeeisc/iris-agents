@@ -10,6 +10,7 @@ from pathlib import Path
 import iris
 
 AGENTS_NAMESPACE = "Agents"
+NAMESPACE_READY = False
 
 def connect(namespace: str, obj: bool = False):
     conn = iris.connect(
@@ -23,26 +24,26 @@ def connect(namespace: str, obj: bool = False):
 
 
 def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
-    """
-    Bootstrap the target namespace from %SYS if it does not yet exist.
-    Also enable it for interoperability productions.
-    """
-    irispy = connect("%SYS", obj=True)
-
-    # already there?
-    exists = irispy.classMethodValue("%SYS.Namespace", "Exists", namespace)
-    if int(exists) == 1:
+    global NAMESPACE_READY
+    if NAMESPACE_READY:
         return
 
-    # CREATE DATABASE creates the namespace and its databases.
-    # Per IRIS docs, this creates the code/data DB structure for the namespace.
-    sql = f"CREATE DATABASE {namespace}"
-    rs = irispy.classMethodObject("%SQL.Statement", "%ExecDirect", "", sql)
+    irispy = connect("%SYS", obj=True)
 
-    # make it production-enabled / interoperability-enabled
-    sc = irispy.classMethodValue("%Library.EnsembleMgr", "EnableNamespace", namespace, 1)
-    if sc != 1:
-        raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+    exists = int(irispy.classMethodValue("%SYS.Namespace", "Exists", namespace))
+    if exists != 1:
+        irispy.classMethodObject("%SQL.Statement", "%ExecDirect", "", f"CREATE DATABASE {namespace}")
+
+    nsiris = connect(namespace, obj=True)
+    has_req = int(nsiris.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", "Ens.Request"))
+    has_bo = int(nsiris.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", "Ens.BusinessOperation"))
+
+    if not (has_req == 1 and has_bo == 1):
+        sc = irispy.classMethodValue("%Library.EnsembleMgr", "EnableNamespace", namespace, 1)
+        if sc != 1:
+            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+
+    NAMESPACE_READY = True
     
 def ensure_chat_table():
     conn = get_connection()
