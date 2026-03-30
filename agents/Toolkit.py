@@ -1,9 +1,35 @@
 from .utils import get_connection ,create_class, ensure_common_utils
-import iris
+from .models import ToolRequest, ToolResponse
+from .Message import Message
+import time
 
 class Toolkit:
 
     def __init__(self, name: str, url: str | None = None):
+
+        Message('ToolRequest', ToolRequest, message_type='Request')
+        Message('ToolResponse', ToolResponse, message_type='Response')
+
+        irispy = get_connection(True)
+
+        deps = ['Agents.Message.ToolRequest', 'Agents.Message.ToolResponse']
+        deadline = time.time() + 10.0
+        missing = deps[:]
+
+        while time.time() < deadline:
+            missing = [
+                dep for dep in deps
+                if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', dep)) != 1
+            ]
+            if not missing:
+                break
+            time.sleep(0.25)
+
+        if missing:
+            raise RuntimeError(
+                "Dependency classes still missing after 10 seconds: "
+                + ", ".join(missing)
+            )
 
         ensure_common_utils()
 
