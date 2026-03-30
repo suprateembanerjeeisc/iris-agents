@@ -64,7 +64,13 @@ This project provides an effective way to:
   IRIS_USERNAME=_SYSTEM
   IRIS_PASSWORD=SYS
   ```
+- Modify `server.py` to configure port if needed, then run the tool server
+  ```bash
+  python server.py
+  ```
 - Run demo.ipynb
+  
+  **Note: Make sure to initialize Toolkit object using the correct port as specified above**
 
 ## API
 ### Chat
