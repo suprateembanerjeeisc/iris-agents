@@ -701,7 +701,11 @@ class Production:
         for agent in self.agents:
             # create gateway and process classes
             self.create_gateway(agent.name)
-            self.create_process(agent.name, agent.response_format, agent.model, agent.system_prompt.text, agent.toolkits or [])
+            self.create_process(agent.name, 
+                                agent.response_format, 
+                                agent.model, 
+                                agent.system_prompt.text if agent.system_prompt else None, 
+                                agent.toolkits or [])
 
             # Items: gateway item name must match what REST calls (agentNameGateway)
             prod_xml += f'<Item Name="{agent.name}Gateway" ClassName="Agents.Gateway.{agent.name}Service" PoolSize="1" Enabled="true"/>\n' + \
@@ -744,7 +748,7 @@ class Production:
 
         initialized = set()
         for agent in self.agents:
-            for toolkit in (agent.toolkits or agent.get_toolkits() or []):
+            for toolkit in (agent.toolkits or []):
                 if toolkit.name in initialized:
                     continue
                 initialized.add(toolkit.name)
@@ -759,61 +763,6 @@ class Production:
                     )
 
         print("Created/compiled/started:", self.name)
-
-    def delete(self):
-        """
-        Stop and delete the production class (User.<ProductionName>).
-        This will NOT remove your agent/message classes.
-
-        Behavior:
-        - Attempts to stop the production.
-        - Attempts to DeleteProduction().
-        - If DeleteProduction fails (often due to runtime state), attempts CleanProduction()
-        and retries DeleteProduction once more.
-        - Raises RuntimeError if final DeleteProduction still fails.
-        """
-        irispy = get_connection(True)
-        prod_id = f'User.{self.name}'
-
-        # 1) Try to stop the production (idempotent if already stopped)
-        sc = irispy.classMethodValue("Ens.Director", "StopProduction", 10, 1)
-        if sc != 1:
-            try:
-                print("StopProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
-            except Exception:
-                print("StopProduction returned status", sc)
-
-        # 2) Try to delete the production
-        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
-        if sc == 1:
-            print("Deleted production:", prod_id)
-            return
-
-        # 3) If delete failed, try a force path: CleanProduction then DeleteProduction
-        #    (CleanProduction is destructive: it purges runtime state)
-        try:
-            sc_clean = irispy.classMethodValue("Ens.Director", "CleanProduction", prod_id)
-            if sc_clean != 1:
-                try:
-                    print("CleanProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc_clean))
-                except Exception:
-                    print("CleanProduction returned status", sc_clean)
-        except Exception as e:
-            # If CleanProduction is not available or threw, log and continue to retry delete
-            print("CleanProduction attempt raised:", e)
-
-        # Retry delete after cleaning
-        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
-        if sc == 1:
-            print("Deleted production after cleaning:", prod_id)
-            return
-
-        # Final failure -> raise with readable error
-        try:
-            errmsg = irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc)
-        except Exception:
-            errmsg = f"DeleteProduction returned status {sc}"
-        raise RuntimeError(f"DeleteProduction failed for {prod_id}: {errmsg}")
 
     def create_dispatch(self):
         cls_text = f'''
@@ -935,6 +884,67 @@ class Production:
         cls_text = r'''
             Class Agents.Admin
             {
+
+                ClassMethod DeleteWebApp(pPath As %String) As %Status
+                {
+                    Set oldNS = $Namespace
+                    Set $Namespace = "%SYS"
+
+                    If '##class(Security.Applications).Exists(pPath) {
+                        Set $Namespace = oldNS
+                        Quit $$$OK
+                    }
+
+                    Set sc = ##class(Security.Applications).Delete(pPath)
+                    Set $Namespace = oldNS
+                    Quit sc
+                }
+
+                ClassMethod DeleteTLSConfigIfExists(pName As %String) As %Status
+                {
+                    Set oldNS = $Namespace
+                    Set $Namespace = "%SYS"
+
+                    If '##class(Security.SSLConfigs).Exists(pName) {
+                        Set $Namespace = oldNS
+                        Quit $$$OK
+                    }
+
+                    Set sc = ##class(Security.SSLConfigs).Delete(pName)
+                    Set $Namespace = oldNS
+                    Quit sc
+                }
+
+                ClassMethod DeleteCredentialIfExists(pName As %String) As %Status
+                {
+                    Quit ##class(Ens.Config.Credentials).DeleteCredential(pName)
+                }
+
+                ClassMethod DeleteClassIfExists(pClassName As %String) As %Status
+                {
+                    New $Namespace,sc,obj,errorlog
+                    Set $Namespace = "Agents"
+                    Set sc = $$$OK
+
+                    If ##class(%Dictionary.ClassDefinition).%ExistsId(pClassName) {
+                        Try {
+                            Set sc = $SYSTEM.OBJ.Delete(pClassName)
+                        } Catch ex {
+                            Set sc = ex.AsStatus()
+                        }
+                        Quit sc
+                    }
+
+                    If ##class(%Dictionary.CompiledClass).%ExistsId(pClassName) {
+                        Try {
+                            Set sc = $SYSTEM.OBJ.Delete(pClassName)
+                        } Catch ex {
+                            Set sc = ex.AsStatus()
+                        }
+                    }
+
+                    Quit sc
+                }
 
                 ClassMethod EnsureTLSConfigForOpenAI(pName As %String = "OpenAI") As %Status
                 {
@@ -1101,8 +1111,118 @@ class Production:
             print('Set OpenAI API Key Successfully!')
 
     def __repr__(self):
-        return \
-        f'''Production: {self.name}
-Agents: {[agent for agent in self.agents]}
-Tools: {[tool for tool in self.tools] if self.tools else 'No configured tools'}
-        '''
+        toolkits = sorted({
+            toolkit.name
+            for agent in self.agents
+            for toolkit in (agent.toolkits or [])
+        })
+
+        return f'''roduction: {self.name}
+    Agents: {[agent for agent in self.agents]}
+    Tools: {toolkits if toolkits else 'No configured tools'}'''
+
+    def cleanup(self):
+        """
+        Remove only production-owned artifacts.
+
+        This removes:
+        - Web app: /csp/agents/<ProductionName>
+        - Dispatch class: Agents.REST.Dispatch.<ProductionName>
+
+        It does NOT remove:
+        - shared classes
+        - message classes
+        - utility classes
+        - LLM/toolkit classes
+        - agent-owned classes
+        - TLS config / credentials
+        """
+        irispy = get_connection(True)
+        errors = []
+
+        web_app_path = f'/csp/agents/{self.name}'
+        try:
+            sc = irispy.classMethodValue("Agents.Admin", "DeleteWebApp", web_app_path)
+            if sc != 1:
+                errors.append(
+                    f"DeleteWebApp({web_app_path}) failed: "
+                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                )
+        except Exception as e:
+            errors.append(f"DeleteWebApp({web_app_path}) raised: {e}")
+
+        try:
+            sc = irispy.classMethodValue(
+                "Agents.Admin",
+                "DeleteClassIfExists",
+                f"Agents.REST.Dispatch.{self.name}"
+            )
+            if sc != 1:
+                errors.append(
+                    f"DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) failed: "
+                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                )
+        except Exception as e:
+            errors.append(f"DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) raised: {e}")
+
+        if errors:
+            raise RuntimeError("Cleanup encountered errors:\n" + "\n".join(errors))
+
+    def delete(self):
+        """
+        Stop and delete the production class (User.<ProductionName>).
+        This will NOT remove your agent/message classes.
+
+        Behavior:
+        - Attempts to stop the production.
+        - Attempts to DeleteProduction().
+        - If DeleteProduction fails (often due to runtime state), attempts CleanProduction()
+        and retries DeleteProduction once more.
+        - Raises RuntimeError if final DeleteProduction still fails.
+        """
+        irispy = get_connection(True)
+        prod_id = f'User.{self.name}'
+
+        # 1) Try to stop the production (idempotent if already stopped)
+        sc = irispy.classMethodValue("Ens.Director", "StopProduction", 10, 1)
+        if sc != 1:
+            try:
+                print("StopProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            except Exception:
+                print("StopProduction returned status", sc)
+
+        # 2) Try to delete the production
+        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
+        if sc == 1:
+            print("Deleted production:", prod_id)
+            self.cleanup()
+            print(f"Cleaned up production-owned artifacts for: {self.name}")
+            return
+
+        # 3) If delete failed, try a force path: CleanProduction then DeleteProduction
+        #    (CleanProduction is destructive: it purges runtime state)
+        try:
+            sc_clean = irispy.classMethodValue("Ens.Director", "CleanProduction", prod_id)
+            if sc_clean != 1:
+                try:
+                    print("CleanProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc_clean))
+                except Exception:
+                    print("CleanProduction returned status", sc_clean)
+        except Exception as e:
+            # If CleanProduction is not available or threw, log and continue to retry delete
+            print("CleanProduction attempt raised:", e)
+
+        # Retry delete after cleaning
+        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
+        if sc == 1:
+            print("Deleted production after cleaning:", prod_id)
+            self.cleanup()
+            print(f"Cleaned up production-owned artifacts for: {self.name}")
+            return
+
+        # Final failure -> raise with readable error
+        try:
+            errmsg = irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc)
+        except Exception:
+            errmsg = f"DeleteProduction returned status {sc}"
+        raise RuntimeError(f"DeleteProduction failed for {prod_id}: {errmsg}")

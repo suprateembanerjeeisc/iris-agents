@@ -1,13 +1,8 @@
 import iris
 from dotenv import load_dotenv
 import os
-import pandas as pd
 
 load_dotenv()
-
-import os
-from pathlib import Path
-import iris
 
 AGENTS_NAMESPACE = "Agents"
 NAMESPACE_READY = False
@@ -55,7 +50,8 @@ def ensure_chat_table():
             WHERE TABLE_TYPE='BASE TABLE'
             AND TABLE_SCHEMA='SQLUser'
         """
-    tables = pd.read_sql_query(sql, conn)["TABLE_NAME"].to_list()
+    cur.execute(sql)
+    tables = [row[0] for row in cur.fetchall()]
 
     if "Chat" not in tables:
         cur.execute("""

@@ -29,9 +29,9 @@ class ToolResponse(BaseModel):
     result: str
 
 class Request(BaseModel):
-    chatId: str = ""
+    chatId: str = "default"
     message: str
-    responseType: str
+    responseType: str = "Agents.Message.Response"
 
 class Response(BaseModel):
     chatId: str = ""

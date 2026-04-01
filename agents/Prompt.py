@@ -1,72 +1,150 @@
 from dotenv import load_dotenv
-import pandas as pd
 import string
 from .utils import get_connection
 
 load_dotenv()
 
-# TODO: Add a version rollback / selection system such that user can specify which version to get
 
 class Prompt:
-
-    def __init__(self, name:str, text:str|None=None):
-
+    def __init__(self, name: str, text: str | None = None, version: int | None = None):
         conn = get_connection()
         cur = conn.cursor()
 
-        sql = '''SELECT TABLE_SCHEMA, TABLE_NAME from INFORMATION_SCHEMA.Tables WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = 'SQLUser' '''
+        def get_tables() -> list[str]:
+            cur.execute(
+                """SELECT TABLE_NAME
+                   FROM INFORMATION_SCHEMA.Tables
+                   WHERE TABLE_TYPE = 'BASE TABLE'
+                     AND TABLE_SCHEMA = 'SQLUser'"""
+            )
+            return [row[0] for row in cur.fetchall()]
 
-        if 'Prompt' not in pd.read_sql_query(sql, conn)['TABLE_NAME'].to_list():
+        tables = get_tables()
 
-            sql = '''CREATE TABLE Prompt (
-                prompt_id    VARCHAR(200) NOT NULL,
-                prompt_text   VARCHAR(200) NOT NULL,
-                version INT NOT NULL,
-                PRIMARY KEY (prompt_id, version))'''
-
-            cur.execute(sql)
+        if "Prompt" not in tables:
+            cur.execute(
+                """CREATE TABLE Prompt (
+                    prompt_id VARCHAR(200) NOT NULL,
+                    prompt_text VARCHAR(200) NOT NULL,
+                    version INT NOT NULL,
+                    PRIMARY KEY (prompt_id, version)
+                )"""
+            )
             conn.commit()
 
-        sql = f'''SELECT * FROM Prompt WHERE prompt_id = '{name}' ORDER BY version DESC'''
-        prompt_df = pd.read_sql_query(sql, conn)
+        # Fetch prompt rows
+        if version is None:
+            cur.execute(
+                """SELECT prompt_id, prompt_text, version
+                   FROM Prompt
+                   WHERE prompt_id = ?
+                   ORDER BY version DESC""",
+                (name,),
+            )
+        else:
+            cur.execute(
+                """SELECT prompt_id, prompt_text, version
+                   FROM Prompt
+                   WHERE prompt_id = ? AND version = ?""",
+                (name, version),
+            )
+
+        rows = cur.fetchall()
 
         last_text = None
-        version = 0
+        current_version = 0
 
-        if prompt_df is not None and len(prompt_df) > 0:
-            name, last_text, version = prompt_df.iloc[0].tolist()
+        if rows:
+            fetched_name, last_text, current_version = rows[0]
+
         self.name = name
         self.text = last_text
-        self.version = version
+        self.version = current_version
 
-        if not last_text and not text:
-            raise KeyError(f'No prompt text found for \'{name}\', and no \'text\' was provided.')
-        
-        if text is not None:
-            match_df = prompt_df[prompt_df["prompt_text"] == text]
+        # Fetch-only mode
+        if text is None:
+            if not rows:
+                if version is None:
+                    raise ValueError(f"No prompt found for '{name}'")
+                raise ValueError(f"No prompt found for '{name}' with version {version}")
+            return
 
-            if len(match_df) > 0:
-                matched_name, matched_text, matched_version = match_df.iloc[0].tolist()
-                self.name = matched_name
-                self.text = matched_text
-                self.version = matched_version
-            else:
-                sql = f"""INSERT INTO Prompt (prompt_id, prompt_text, version)
-                          VALUES ('{name}', '{text}', {version + 1})"""
-                cur.execute(sql)
-                conn.commit()
-                self.text = text
-                self.version += 1
+        # If a version was explicitly requested together with text, treat that as fetch-only validation.
+        # Do not create a new version in that case.
+        if version is not None:
+            if not rows:
+                raise ValueError(f"No prompt found for '{name}' with version {version}")
+            if last_text != text:
+                raise ValueError(
+                    f"Prompt '{name}' version {version} exists, but its text does not match the provided text."
+                )
+            return
+
+        # No explicit version: either reuse matching existing text or create a new version
+        for prompt_id, prompt_text, prompt_version in rows:
+            if prompt_text == text:
+                self.name = prompt_id
+                self.text = prompt_text
+                self.version = prompt_version
+                return
+
+        new_version = current_version + 1
+        cur.execute(
+            """INSERT INTO Prompt (prompt_id, prompt_text, version)
+               VALUES (?, ?, ?)""",
+            (name, text, new_version),
+        )
+        conn.commit()
+
+        self.name = name
+        self.text = text
+        self.version = new_version
 
     def __repr__(self) -> str:
-        return f'Prompt(name={self.name!r}, version={self.version}, text={self.text!r})'
-    
+        return f"Prompt(name={self.name!r}, version={self.version}, text={self.text!r})"
+
     def __str__(self) -> str:
-        return self.text or ''
+        return self.text or ""
+
+    def __eq__(self, other):
+        if not isinstance(other, Prompt):
+            return NotImplemented
+        return (self.name, self.version, self.text) == (other.name, other.version, other.text)
+
+    def __hash__(self):
+        return hash((self.name, self.version, self.text))
+
+    def get_variables(self) -> list[str]:
+        if not self.text:
+            return []
+
+        variables: list[str] = []
+        seen = set()
+
+        for _, field_name, _, _ in string.Formatter().parse(self.text):
+            if field_name and field_name not in seen:
+                seen.add(field_name)
+                variables.append(field_name)
+
+        return variables
 
     def build(self, **vars) -> str:
-        vars_req = {var for _, var, _, _ in string.Formatter().parse(self.text) if var}
-        missing = vars_req - vars.keys()
+        if not self.text:
+            raise KeyError(f"No prompt text found for '{self.name}'")
+
+        required = set(self.get_variables())
+        missing = required - vars.keys()
         if missing:
-            raise KeyError(f'Missing variables {sorted(missing)} for the selected prompt')
+            raise KeyError(f"Missing variables {sorted(missing)} for the selected prompt")
+
         return self.text.format(**vars)
+    
+    def delete(self) -> None:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("DELETE FROM Prompt WHERE prompt_id = ?", (self.name,))
+        conn.commit()
+
+        self.text = None
+        self.version = 0

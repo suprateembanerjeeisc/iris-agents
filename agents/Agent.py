@@ -8,34 +8,27 @@ from .Prompt import Prompt
 from .Message import Message
 from .Chat import Chat
 
-
 class Agent:
+    _UNSET = object()
+
     def __init__(
         self,
         name: str,
-        description: str | None = None,
-        system_prompt: Prompt | None = None,
-        model: str | None = None,
-        toolkits: list[Toolkit] | None = None,
-        response_format: BaseModel | None = None,
+        description: str | None | object = _UNSET,
+        system_prompt: Prompt | None | object = _UNSET,
+        model: str | None | object = _UNSET,
+        toolkits: list[Toolkit] | None | object = _UNSET,
+        response_format: type[BaseModel] | None | object = _UNSET,
     ):
         conn = get_connection()
         cur = conn.cursor()
 
-        response_message = None
-        if response_format is not None:
-            response_message = Message(
-                response_format.__name__,
-                response_format,
-                message_type="Response",
-            )
-
-        # --- Ensure tables exist
         sql = """SELECT TABLE_NAME
                  FROM INFORMATION_SCHEMA.Tables
                  WHERE TABLE_TYPE='BASE TABLE'
                  AND TABLE_SCHEMA='SQLUser'"""
-        tables = pd.read_sql_query(sql, conn)["TABLE_NAME"].to_list()
+        cur.execute(sql)
+        tables = [row[0] for row in cur.fetchall()]
 
         if "Agent" not in tables:
             cur.execute(
@@ -49,8 +42,6 @@ class Agent:
             )
             conn.commit()
 
-        tables = pd.read_sql_query(sql, conn)["TABLE_NAME"].to_list()
-
         if "AgentToolkit" not in tables:
             cur.execute(
                 """CREATE TABLE AgentToolkit (
@@ -61,24 +52,66 @@ class Agent:
             )
             conn.commit()
 
-        # --- Read agent row (if exists)
-        agent_df = pd.read_sql_query(
-            "SELECT * FROM Agent WHERE agent_name = ?",
-            conn,
-            params=(name,),
+        cur.execute("SELECT * FROM Agent WHERE agent_name = ?", (name,))
+        row = cur.fetchone()
+
+        fetch_only = all(
+            value is Agent._UNSET
+            for value in (description, system_prompt, model, toolkits, response_format)
         )
 
-        if agent_df is not None and len(agent_df) > 0:
-            row = agent_df.iloc[0]
+        if fetch_only:
+            if row is None:
+                raise KeyError(f"No Agent found for '{name}'")
 
-            system_prompt_id = system_prompt.name if system_prompt else row["system_prompt_id"]
+            _, description, system_prompt_id, model, response_format = row
+            self.name = name
+            self.description = description
+            self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
+            self.model = model
+            self.response_format = Message(response_format, None, message_type="Response") if response_format else None
 
-            new_description = description if description is not None else row["description"]
-            new_model = model if model is not None else row["model"]
-            new_response_format = (
-                response_message.name if response_message is not None else row["response_format"]
+            cur.execute(
+                "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
+                (self.name,),
             )
+            toolkit_rows = cur.fetchall()
+            self.toolkits = [Toolkit(toolkit_id) for (toolkit_id,) in toolkit_rows]
+            return
 
+        # Only model is required when creating/updating
+        if model is Agent._UNSET:
+            raise KeyError("When creating/updating an agent, provide at least model.")
+
+        description_value = None if description is Agent._UNSET else description
+        system_prompt_id = system_prompt.name if isinstance(system_prompt, Prompt) else None
+        toolkit_list = [] if toolkits in (Agent._UNSET, None) else toolkits
+
+        response_message = None
+        response_format_name = None
+        if response_format not in (Agent._UNSET, None):
+            response_message = Message(
+                response_format.__name__,
+                response_format,
+                message_type="Response",
+            )
+            response_format_name = response_message.name
+
+        if row is None:
+            cur.execute(
+                """INSERT INTO Agent
+                   (agent_name, description, system_prompt_id, model, response_format)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    name,
+                    description_value,
+                    system_prompt_id,
+                    model,
+                    response_format_name,
+                ),
+            )
+            conn.commit()
+        else:
             cur.execute(
                 """UPDATE Agent SET
                     description = ?,
@@ -87,69 +120,27 @@ class Agent:
                     response_format = ?
                    WHERE agent_name = ?""",
                 (
-                    new_description,
+                    description_value,
                     system_prompt_id,
-                    new_model,
-                    new_response_format,
+                    model,
+                    response_format_name,
                     name,
                 ),
             )
             conn.commit()
 
-            self.name = name
-            self.description = new_description
-            self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
-            self.model = new_model
-            self.response_format = response_message if response_message is not None else new_response_format
-
-            # Load toolkit state from DB during init
-            toolkit_df = pd.read_sql_query(
-                "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
-                conn,
-                params=(self.name,),
-            )
-            self.toolkits = []
-            if not toolkit_df.empty:
-                self.toolkits = [
-                    Toolkit(toolkit_id)
-                    for toolkit_id in toolkit_df["toolkit_id"].to_list()
-                ]
-
-            # Apply any additional toolkits passed into init
-            if toolkits:
-                self.add_toolkits(toolkits)
-
-            return
-
-        # --- Create new agent
-        if any(value is None for value in (description, model)):
-            raise KeyError("Missing required fields to create a new agent.")
-
-        system_prompt_id = system_prompt.name if system_prompt else None
-
-        cur.execute(
-            """INSERT INTO Agent
-               (agent_name, description, system_prompt_id, model, response_format)
-               VALUES (?, ?, ?, ?, ?)""",
-            (
-                name,
-                description,
-                system_prompt_id,
-                model,
-                response_message.name if response_message else None,
-            ),
-        )
-        conn.commit()
+            cur.execute("DELETE FROM AgentToolkit WHERE agent_name = ?", (name,))
+            conn.commit()
 
         self.name = name
-        self.description = description
+        self.description = description_value
         self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
         self.model = model
         self.response_format = response_message
         self.toolkits = []
 
-        if toolkits:
-            self.add_toolkits(toolkits)
+        if toolkit_list:
+            self.add_toolkits(toolkit_list)
 
     def __repr__(self) -> str:
         return (
@@ -206,8 +197,8 @@ class Agent:
 
     def __call__(
         self,
-        chat: Chat | str | None = None,
         message: str | None = None,
+        chat: Chat | str | None = None,
         response_format: BaseModel | None = None,
     ) -> str:
         irispy = get_connection(True)
@@ -215,7 +206,9 @@ class Agent:
         prod_ref = iris.IRISReference("")
         state_ref = iris.IRISReference(0)
 
-        response_format = (
+        explicit_response_format = response_format
+
+        effective_response_format = (
             Message(response_format.__name__, response_format, message_type="Response")
             if response_format
             else self.response_format
@@ -245,18 +238,23 @@ class Agent:
         if message is None:
             raise ValueError("Provide message=...")
 
-        chat_id = ""
         if isinstance(chat, Chat):
             chat_id = chat.id
         elif isinstance(chat, str):
             chat_id = chat
-        elif chat is not None:
+        elif chat is None:
+            chat_id = "default"
+        else:
             raise TypeError("chat must be Chat | str | None")
 
         payload = {
             "message": message,
             "chatId": chat_id,
-            "responseType": f"Agents.Message.{response_format.name}" if response_format else "",
+            "responseType": (
+                f"Agents.Message.{effective_response_format.name}"
+                if effective_response_format
+                else "Agents.Message.Response"
+            ),
         }
 
         request_object = irispy.classMethodObject("Agents.Message.Request", "%New")
@@ -291,18 +289,34 @@ class Agent:
 
         try:
             data = json.loads(raw)
-            if isinstance(data, dict) and data.get("ChatId", "") == "":
-                data.pop("ChatId", None)
+
+            if isinstance(data, dict):
+                if data.get("ChatId", "") == "":
+                    data.pop("ChatId", None)
+                if data.get("chatId", "") == "":
+                    data.pop("chatId", None)
+
                 raw = json.dumps(data)
+
+                using_default_response = (
+                    explicit_response_format is None and self.response_format is None
+                ) or (
+                    effective_response_format is not None
+                    and getattr(effective_response_format, "name", "") == "Response"
+                )
+
+                if using_default_response:
+                    if "message" in data and isinstance(data["message"], str):
+                        return data["message"]
+                    if "Message" in data and isinstance(data["Message"], str):
+                        return data["Message"]
+
         except json.JSONDecodeError:
             pass
 
-        if response_format is None:
-            try:
-                data = json.loads(raw)
-                if isinstance(data, dict) and "Message" in data:
-                    return data["Message"]
-            except json.JSONDecodeError:
-                pass
-
         return raw
+    
+    def __eq__(self, other):
+        if not isinstance(other, Agent):
+            return NotImplemented
+        return self.name == other.name

@@ -10,7 +10,8 @@ class Message:
         MessageType(message_type)
         self.name = name
         self.type = message_type
-        self.build(model)
+        if model is not None:
+            self.build(model)
 
     def sanitize(self, json_name: str) -> str:
         parts = re.split(r'[^A-Za-z0-9]+', json_name)

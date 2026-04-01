@@ -20,7 +20,8 @@ class Chat:
             WHERE TABLE_TYPE='BASE TABLE'
             AND TABLE_SCHEMA='SQLUser'
         """
-        tables = pd.read_sql_query(sql, conn)["TABLE_NAME"].to_list()
+        cur.execute(sql)
+        tables = [row[0] for row in cur.fetchall()]
 
         if "Chat" not in tables:
             cur.execute("""
@@ -93,3 +94,8 @@ class Chat:
 
     def __repr__(self) -> str:
         return f"Chat(name={self.id!r}, messages={len(self.messages)})"
+    
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Chat):
+            return NotImplemented
+        return self.id == other.id and self.messages == other.messages
