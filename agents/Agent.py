@@ -2,11 +2,13 @@ import json
 import pandas as pd
 import iris
 from pydantic import BaseModel
-from .utils import get_connection
+
+from .utils import get_connection, create_class
 from .Toolkit import Toolkit
 from .Prompt import Prompt
 from .Message import Message
 from .Chat import Chat
+
 
 class Agent:
     _UNSET = object()
@@ -69,7 +71,10 @@ class Agent:
             self.description = description
             self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
             self.model = model
-            self.response_format = Message(response_format, None, message_type="Response") if response_format else None
+            self.response_format = (
+                Message(response_format, None, message_type="Response")
+                if response_format else None
+            )
 
             cur.execute(
                 "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
@@ -79,7 +84,6 @@ class Agent:
             self.toolkits = [Toolkit(toolkit_id) for (toolkit_id,) in toolkit_rows]
             return
 
-        # Only model is required when creating/updating
         if model is Agent._UNSET:
             raise KeyError("When creating/updating an agent, provide at least model.")
 
@@ -147,6 +151,407 @@ class Agent:
             f"Agent(name={self.name!r}, model={self.model!r}, "
             f"system_prompt={getattr(self.system_prompt, 'name', None)!r})"
         )
+
+    def create_gateway(self) -> None:
+        cls_text = f'''Class Agents.Gateway.{self.name}Service Extends Ens.BusinessService
+        {{
+        Method OnProcessInput(pInput As Agents.Message.Request, pOutput As %RegisteredObject) As %Status
+        {{
+            Set sc = ..SendRequestSync("{self.name}", pInput, .pResponse)
+            Set pOutput = pResponse
+            Quit sc
+        }}
+
+        ClassMethod OnGetConnections(Output pArray As %String, pItem As Ens.Config.Item)
+        {{
+            Do ##super(.pArray, pItem)
+            Set pArray("{self.name}") = ""
+        }}
+        }}
+        '''
+        create_class(f'Agents.Gateway.{self.name}Service', cls_text)
+
+    def create_process(self) -> None:
+        if self.response_format:
+            default_response_cls = f"Agents.Message.{self.response_format.name}"
+        else:
+            default_response_cls = "Agents.Message.Response"
+
+        system_prompt_text = self.system_prompt.text if self.system_prompt else ""
+        system_prompt_json = json.dumps(system_prompt_text or "")
+
+        toolkit_manifest_blocks = ""
+
+        for toolkit in (self.toolkits or []):
+            toolkit_name = toolkit.name.replace('"', '""')
+
+            toolkit_manifest_blocks += f'''
+                    Set toolkitName = "{toolkit_name}"
+                    Set out = out_"Toolkit: "_toolkitName_$C(10)
+
+                    Set cls = "Agents.Operation.Toolkit{toolkit_name}"
+                    Set raw = ""
+                    Set sc = $classmethod(cls, "ListTools", .raw)
+                    If sc '= 1 {{
+                        Set out = out_"  (tools/list failed)"_$C(10,10)
+                    }} Else {{
+                        Try {{
+                            Set rawText = ##class(Agents.Utils.Common).ToJSONString(raw)
+                            Set obj = ##class(%DynamicObject).%FromJSON(rawText)
+                            Set result = obj.%Get("result")
+                            Set tools = result.%Get("tools")
+
+                            If tools="" ! tools.%Size()=0 {{
+                                Set out = out_"  (no tools exposed)"_$C(10,10)
+                            }} Else {{
+                                For j=0:1:tools.%Size()-1 {{
+                                    Set tool = tools.%Get(j)
+                                    Set tname = tool.%Get("name")
+                                    Set tdesc = tool.%Get("description")
+                                    Set tschema = ""
+                                    If tool.%IsDefined("inputSchema") {{
+                                        Set tschema = tool.%Get("inputSchema").%ToJSON()
+                                    }}
+
+                                    Set out = out_"- "_tname
+                                    If tdesc'="" Set out = out_": "_tdesc
+                                    Set out = out_$C(10)
+                                    If tschema'="" {{
+                                        Set out = out_"  inputSchema: "_tschema_$C(10)
+                                    }}
+                                }}
+                                Set out = out_$C(10)
+                            }}
+                        }} Catch ex {{
+                            Set out = out_"  (failed to parse tools/list response)"_$C(10,10)
+                        }}
+                    }}
+            '''
+
+        cls_text = f'''Class Agents.Process.{self.name} Extends Ens.BusinessProcess
+        {{
+        Parameter SETTINGS = "";
+
+        ClassMethod BuildToolManifest() As %String
+        {{
+            Set out = "You may use tools when needed."_$C(10,10)
+            Set out = out_"When using a tool, return JSON with:"_$C(10)
+            Set out = out_"- IsTool = true"_$C(10)
+            Set out = out_"- Toolkit = toolkit name"_$C(10)
+            Set out = out_"- Tool = tool name"_$C(10)
+            Set out = out_"- Content = JSON string of tool arguments"_$C(10,10)
+            Set out = out_"Available tools:"_$C(10,10)
+            Set out = out_"Tool result handling rules:"_$C(10)
+            Set out = out_"1. A prior developer message may contain a JSON object with keys toolkit, tool, and result. This is the authoritative output of a completed tool call."_$C(10)
+            Set out = out_"2. The result field may contain a raw JSON-RPC response from the MCP server."_$C(10)
+            Set out = out_"3. If result contains jsonrpc/result and no error, treat the tool call as successful and use the returned data to answer the user."_$C(10)
+            Set out = out_"4. Do not call the same tool again with the same arguments if the prior tool result already answers the question."_$C(10)
+            Set out = out_"5. Only call another tool if the previous result shows an error, is missing required information, or a different tool is needed."_$C(10)
+            Set out = out_"6. If the previous tool result already contains enough information, return IsTool=false and produce the final answer JSON in Content."
+
+            {toolkit_manifest_blocks}
+
+            Set out = out_"Only call a tool when needed. If no tool is needed, return IsTool=false and put the final answer JSON in Content."
+            Quit out
+        }}
+
+        ClassMethod GetSystemPrompt() As %String
+        {{
+            Quit {system_prompt_json}
+        }}
+
+        Method InvokeTool(
+            pToolkit As %String,
+            pTool As %String,
+            pParams As %String,
+            Output pResponse As Agents.Message.ToolResponse
+        ) As %Status
+        {{
+            Set pResponse = ##class(Agents.Message.ToolResponse).%New()
+            Set pResponse.Id = $SYSTEM.Util.CreateGUID()
+            Set pResponse.Toolkit = pToolkit
+
+            Set req = ##class(Agents.Message.ToolRequest).%New()
+            Set req.Id = pResponse.Id
+            Set req.Toolkit = pToolkit
+            Set req.Name = pTool
+            Set req.Params = ##class(Agents.Utils.Common).ToJSONString(pParams)
+
+            Set sc = ..SendRequestSync(pToolkit, req, .toolResp)
+            If $$$ISERR(sc) {{
+                Set pResponse.Ok = 0
+                Set pResponse.Result = $SYSTEM.Status.GetErrorText(sc)
+                Quit sc
+            }}
+
+            Set pResponse = toolResp
+            Quit $$$OK
+        }}
+
+        Method OnRequest(
+            pRequest As %Library.Persistent,
+            Output pResponse As %Library.Persistent
+        ) As %Status
+        {{
+            Set sc = $$$OK
+            Set stageSC = $$$OK
+            Set logMsg = ""
+            Set tLLMReq = ""
+            Set tLLMResp = ""
+            Set tToolResp = ""
+            Set tFinalJSON = ""
+            Set toolTurns = 0
+            Set maxToolTurns = 3
+
+            Set tChatId = pRequest.ChatId
+            Set tUserMessage = pRequest.Message
+            Set tResponseType = pRequest.ResponseType
+            If tResponseType="" {{
+                Set tResponseType = "{default_response_cls}"
+            }}
+
+            Set logMsg = "OnRequest start agent="_..%ConfigName_" chatId="_$Get(tChatId)
+            $$$LOGINFO(logMsg)
+            Set logMsg = "User message="_$Extract($Get(tUserMessage),1,300)
+            $$$LOGINFO(logMsg)
+
+            If tChatId'="" {{
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ##class(Agents.Utils.Common).AppendChat(tChatId, "user", tUserMessage)
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=AppendUser exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Quit stageSC
+                }}
+            }}
+
+            Set stageSC = $$$OK
+            Try {{
+                Set tLLMReq = ##class(Agents.Message.LLMRequest).%New()
+                Set tLLMReq.Model = "{self.model}"
+                Set tLLMReq.ResponseType = tResponseType
+
+                If tChatId'="" {{
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildChatJSON(tChatId, "", ..GetSystemPrompt(), ..BuildToolManifest()))
+                }} Else {{
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildChatJSON("", tUserMessage, ..GetSystemPrompt(), ..BuildToolManifest()))
+                }}
+
+                Set logMsg = "Stage=BuildFirstLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
+                $$$LOGINFO(logMsg)
+            }} Catch ex {{
+                $$$LOGERROR("Stage=BuildFirstLLMRequest exception")
+                Set stageSC = ex.AsStatus()
+            }}
+            If $$$ISERR(stageSC) {{
+                Quit stageSC
+            }}
+
+            Set stageSC = $$$OK
+            Try {{
+                Set sc = ..SendRequestSync("LLM", tLLMReq, .tLLMResp)
+                $$$LOGSTATUS(sc)
+                If $$$ISERR(sc) {{
+                    Set stageSC = sc
+                }}
+            }} Catch ex {{
+                $$$LOGERROR("Stage=FirstLLMCall exception")
+                Set stageSC = ex.AsStatus()
+            }}
+            If $$$ISERR(stageSC) {{
+                Quit stageSC
+            }}
+
+            If '$IsObject(tLLMResp) {{
+                Quit $$$ERROR($$$GeneralError,"LLM returned no object")
+            }}
+
+            Set toolTurns = 0
+            Set maxToolTurns = 3
+            Set chainExceeded = 0
+            Set stopLoop = 0
+
+            While tLLMResp.IsTool=1 {{
+                Set toolTurns = toolTurns + 1
+                If toolTurns>maxToolTurns {{
+                    Set chainExceeded = 1
+                    Set stageSC = $$$ERROR($$$GeneralError,"Tool chain exceeded max depth")
+                    Quit
+                }}
+
+                Set logMsg = "ToolTurn="_toolTurns_" Toolkit="_tLLMResp.Toolkit_" Tool="_tLLMResp.Tool
+                $$$LOGINFO(logMsg)
+                Set logMsg = "Tool params="_$Extract(##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),1,1000)
+                $$$LOGINFO(logMsg)
+
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ..InvokeTool(tLLMResp.Toolkit, tLLMResp.Tool, tLLMResp.Content, .tToolResp)
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=InvokeTool exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+
+                Set logMsg = "Tool result="_$Extract(##class(Agents.Utils.Common).ToJSONString(tToolResp.Result),1,1500)
+                $$$LOGINFO(logMsg)
+
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ##class(Agents.Utils.Common).LogToolUsage(
+                        tChatId,
+                        ..%ConfigName,
+                        tLLMResp.Toolkit,
+                        tLLMResp.Tool,
+                        ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),
+                        +tToolResp.OkGet(),
+                        ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet())
+                    )
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=LogToolUsage exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+
+                Set stageSC = $$$OK
+                Try {{
+                    Set tLLMReq = ##class(Agents.Message.LLMRequest).%New()
+                    Set tLLMReq.Model = "{self.model}"
+                    Set tLLMReq.ResponseType = tResponseType
+
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildNextLLMChatJSON(
+                        tChatId,
+                        tUserMessage,
+                        tLLMResp.Toolkit,
+                        tLLMResp.Tool,
+                        tToolResp.Result,
+                        ..GetSystemPrompt(),
+                        ..BuildToolManifest()
+                    ))
+
+                    Set logMsg = "Stage=BuildNextLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
+                    $$$LOGINFO(logMsg)
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=BuildNextLLMRequest exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+
+                Set stageSC = $$$OK
+                Try {{
+                    Set tLLMResp = ""
+                    Set sc = ..SendRequestSync("LLM", tLLMReq, .tLLMResp)
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=NextLLMCall exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+
+                If '$IsObject(tLLMResp) {{
+                    Set stageSC = $$$ERROR($$$GeneralError,"LLM returned no object during tool chain")
+                    Set stopLoop = 1
+                    Quit
+                }}
+            }}
+
+            If chainExceeded=1 {{
+                Quit stageSC
+            }}
+            If stopLoop=1 {{
+                Quit stageSC
+            }}
+            If $$$ISERR(stageSC) {{
+                Quit stageSC
+            }}
+
+            Set tFinalJSON = ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content)
+            Set logMsg = "Final JSON="_$Extract(tFinalJSON,1,1500)
+            $$$LOGINFO(logMsg)
+
+            Set stageSC = $$$OK
+            Try {{
+                Set sc = ##class(Agents.Utils.Common).ImportJSONToResponse(tFinalJSON, tResponseType, .pResponse)
+                $$$LOGSTATUS(sc)
+                If $$$ISERR(sc) {{
+                    Set stageSC = sc
+                }}
+            }} Catch ex {{
+                $$$LOGERROR("Stage=ImportJSONToResponse exception")
+                Set stageSC = ex.AsStatus()
+            }}
+            If $$$ISERR(stageSC) {{
+                Quit stageSC
+            }}
+
+            If tChatId'="" {{
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ##class(Agents.Utils.Common).AppendChat(tChatId, "assistant", tFinalJSON)
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=AppendFinalAnswer exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Quit stageSC
+                }}
+            }}
+
+            Quit $$$OK
+        }}
+
+        Method OnResponse(
+            pRequest As %Library.Persistent,
+            ByRef pResponse As %Library.Persistent,
+            pCallRequest As %Library.Persistent,
+            pCallResponse As %Library.Persistent,
+            pCompletionKey As %String
+        ) As %Status
+        {{
+            Quit $$$OK
+        }}
+
+        }}
+        '''
+        create_class(f'Agents.Process.{self.name}', cls_text)
+
+    def ensure_runtime_classes(self) -> None:
+        self.create_gateway()
+        self.create_process()
 
     def add_toolkits(self, toolkits: list[Toolkit]) -> None:
         conn = get_connection()
@@ -260,7 +665,7 @@ class Agent:
         request_object = irispy.classMethodObject("Agents.Message.Request", "%New")
         request_object.invoke("%JSONImport", json.dumps(payload))
 
-        gateway_item = f"{self.name}Gateway"
+        gateway_item = f'{self.name}Gateway'
 
         service_ref = iris.IRISReference(None)
         sc = irispy.classMethodValue("Ens.Director", "CreateBusinessService", gateway_item, service_ref)
@@ -315,7 +720,7 @@ class Agent:
             pass
 
         return raw
-    
+
     def __eq__(self, other):
         if not isinstance(other, Agent):
             return NotImplemented
