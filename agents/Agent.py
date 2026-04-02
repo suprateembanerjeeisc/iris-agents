@@ -147,6 +147,8 @@ class Agent:
             self.add_toolkits(toolkit_list)
 
     def __repr__(self) -> str:
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
         return (
             f"Agent(name={self.name!r}, model={self.model!r}, "
             f"system_prompt={getattr(self.system_prompt, 'name', None)!r})"
@@ -554,6 +556,8 @@ class Agent:
         self.create_process()
 
     def add_toolkits(self, toolkits: list[Toolkit]) -> None:
+        if not self.exists():
+            return 'Agent does not exist'
         conn = get_connection()
         cur = conn.cursor()
 
@@ -578,6 +582,8 @@ class Agent:
         conn.commit()
 
     def remove_toolkits(self, toolkits: list[Toolkit] | list[str]) -> None:
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
         conn = get_connection()
         cur = conn.cursor()
 
@@ -606,6 +612,10 @@ class Agent:
         chat: Chat | str | None = None,
         response_format: BaseModel | None = None,
     ) -> str:
+        
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
+        
         irispy = get_connection(True)
 
         prod_ref = iris.IRISReference("")
@@ -722,6 +732,91 @@ class Agent:
         return raw
 
     def __eq__(self, other):
+
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
+        
         if not isinstance(other, Agent):
             return NotImplemented
         return self.name == other.name
+    
+    def delete(self) -> None:
+        """
+        Delete only agent-owned artifacts.
+
+        This removes:
+        - Agent row from SQLUser.Agent
+        - AgentToolkit rows for this agent from SQLUser.AgentToolkit
+        - Gateway class: Agents.Gateway.<AgentName>Service
+        - Process class: Agents.Process.<AgentName>
+
+        This does NOT remove:
+        - shared message classes
+        - toolkit definitions in SQLUser.Toolkit
+        - toolkit operation classes
+        - shared utility classes
+        - productions
+        """
+
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
+        
+        conn = get_connection()
+        cur = conn.cursor()
+        irispy = get_connection(True)
+
+        errors = []
+
+        # Delete DB rows first
+        try:
+            cur.execute("DELETE FROM AgentToolkit WHERE agent_name = ?", (self.name,))
+            conn.commit()
+        except Exception as e:
+            errors.append(f"DELETE AgentToolkit failed for {self.name}: {e}")
+
+        try:
+            cur.execute("DELETE FROM Agent WHERE agent_name = ?", (self.name,))
+            conn.commit()
+        except Exception as e:
+            errors.append(f"DELETE Agent failed for {self.name}: {e}")
+
+        # Delete runtime classes
+        gateway_class = f"Agents.Gateway.{self.name}Service"
+        process_class = f"Agents.Process.{self.name}"
+
+        try:
+            sc = irispy.classMethodValue(
+                "Agents.Admin",
+                "DeleteClassIfExists",
+                gateway_class
+            )
+            if sc != 1:
+                errors.append(
+                    f"DeleteClassIfExists({gateway_class}) failed: "
+                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                )
+        except Exception as e:
+            errors.append(f"DeleteClassIfExists({gateway_class}) raised: {e}")
+
+        try:
+            sc = irispy.classMethodValue(
+                "Agents.Admin",
+                "DeleteClassIfExists",
+                process_class
+            )
+            if sc != 1:
+                errors.append(
+                    f"DeleteClassIfExists({process_class}) failed: "
+                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                )
+        except Exception as e:
+            errors.append(f"DeleteClassIfExists({process_class}) raised: {e}")
+
+        if errors:
+            raise RuntimeError("Agent cleanup encountered errors:\n" + "\n".join(errors))
+        
+    def exists(self) -> bool:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM Agent WHERE agent_name = ?", (self.name,))
+        return cur.fetchone() is not None

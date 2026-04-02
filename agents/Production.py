@@ -14,35 +14,43 @@ load_dotenv()
 class Production:
 
     def __init__(self, 
-                 name: str,
-                 agents: list[Agent] | None = None,
-                 openai_api_key: str | None = None):
+             name: str,
+             agents: list[Agent] | None = None,
+             openai_api_key: str | None = None):
         self.name = name
         self.openai_api_key = openai_api_key
-        ensure_common_utils()
-        ensure_production_utils()
-        self.create_models()
         irispy = get_connection(True)
-        
-        if not agents:
-            if not get_connection(True).classMethodObject('Ens.Config.Production', '%OpenId', f'User.{self.name}'):
+
+        if agents is None and openai_api_key is None:
+            if not irispy.classMethodObject('Ens.Config.Production', '%OpenId', f'User.{self.name}'):
                 raise RuntimeError(f'Production class not found: User.{self.name}')
-            else:
-                elements = irispy.classMethodObject('%ResultSet', '%New', 'Ens.Config.Production:EnumerateConfigItemNames')
-                elements.invoke('Execute', f'User.{self.name}', '')
-                self.agents = []
-                while elements.invoke('%Next'):
-                    clsname = elements.invoke('GetData', 3)
-                    if isinstance(clsname, str) and clsname.startswith('Agents.Process.'):
-                        agent_name = clsname.split('Agents.Process.', 1)[1].strip()
-                        if agent_name:
-                            self.agents.append(Agent(agent_name))
+
+            elements = irispy.classMethodObject('%ResultSet', '%New', 'Ens.Config.Production:EnumerateConfigItemNames')
+            elements.invoke('Execute', f'User.{self.name}', '')
+            self.agents = []
+
+            while elements.invoke('%Next'):
+                clsname = elements.invoke('GetData', 3)
+                if isinstance(clsname, str) and clsname.startswith('Agents.Process.'):
+                    agent_name = clsname.split('Agents.Process.', 1)[1].strip()
+                    if agent_name:
+                        self.agents.append(Agent(agent_name))
         else:
-            self.agents = agents
+            self.agents = agents or []
+
+            if not self.agents:
+                existing = irispy.classMethodObject('Ens.Config.Production', '%OpenId', f'User.{self.name}')
+                if existing:
+                    elements = irispy.classMethodObject('%ResultSet', '%New', 'Ens.Config.Production:EnumerateConfigItemNames')
+                    elements.invoke('Execute', f'User.{self.name}', '')
+                    while elements.invoke('%Next'):
+                        clsname = elements.invoke('GetData', 3)
+                        if isinstance(clsname, str) and clsname.startswith('Agents.Process.'):
+                            agent_name = clsname.split('Agents.Process.', 1)[1].strip()
+                            if agent_name:
+                                self.agents.append(Agent(agent_name))
+
             self.build()
-        self.create_dispatch()
-        self.create_admin()
-        self.ensure_tool_usage_table()
 
     def ensure_tool_usage_table(self):
         conn = get_connection()
@@ -285,6 +293,11 @@ class Production:
         create_class('Agents.Operation.LLM', cls_text)
 
     def build(self):
+        ensure_common_utils()
+        ensure_production_utils()
+        self.create_models()
+        self.ensure_tool_usage_table()
+        self.initialize_LLM()
 
         prod_xml = f'''<Production Name="{self.name}" LogGeneralTraceEvents="false">
         <Description></Description>
@@ -296,10 +309,9 @@ class Production:
         for agent in self.agents:
             agent.ensure_runtime_classes()
 
-            # Items: gateway item name must match what REST calls (agentNameGateway)
             prod_xml += f'<Item Name="{agent.name}Gateway" ClassName="Agents.Gateway.{agent.name}Service" PoolSize="1" Enabled="true"/>\n' + \
-                        f'<Item Name="{agent.name}" ClassName="Agents.Process.{agent.name}" PoolSize="1" Enabled="true"/>\n'
-            
+            f'<Item Name="{agent.name}" ClassName="Agents.Process.{agent.name}" PoolSize="1" Enabled="true"/>\n'
+
             for toolkit in (agent.toolkits or []):
                 if toolkit.name not in toolkit_names:
                     toolkit_names.add(toolkit.name)
@@ -308,10 +320,8 @@ class Production:
                         f'ClassName="Agents.Operation.Toolkit{toolkit.name}" '
                         f'PoolSize="1" Enabled="true"/>\n'
                     )
-            
-        prod_xml += '<Item Name="LLM" ClassName="Agents.Operation.LLM" PoolSize="1" Enabled="true"/>\n</Production>'
 
-        self.initialize_LLM()
+        prod_xml += '<Item Name="LLM" ClassName="Agents.Operation.LLM" PoolSize="1" Enabled="true"/>\n</Production>'
 
         cls_text = f"""Class {self.name} Extends Ens.Production
         {{
@@ -322,8 +332,9 @@ class Production:
         }}
         """
 
-        # Use self.create_class and the production name from self.name
         create_class(self.name, cls_text)
+        self.create_dispatch()
+        self.create_admin()
 
     def start(self):
         irispy = get_connection(True)

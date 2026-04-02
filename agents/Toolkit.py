@@ -1,37 +1,15 @@
-from .utils import get_connection ,create_class, ensure_common_utils
+from .utils import get_connection, create_class, ensure_common_utils
 from .models import ToolRequest, ToolResponse
 from .Message import Message
+import iris
 import time
+from urllib.parse import urlparse
+
 
 class Toolkit:
 
     def __init__(self, name: str, url: str | None = None):
-
-        Message('ToolRequest', ToolRequest, message_type='Request')
-        Message('ToolResponse', ToolResponse, message_type='Response')
-
-        irispy = get_connection(True)
-
-        deps = ['Agents.Message.ToolRequest', 'Agents.Message.ToolResponse']
-        deadline = time.time() + 10.0
-        missing = deps[:]
-
-        while time.time() < deadline:
-            missing = [
-                dep for dep in deps
-                if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', dep)) != 1
-            ]
-            if not missing:
-                break
-            time.sleep(0.25)
-
-        if missing:
-            raise RuntimeError(
-                "Dependency classes still missing after 10 seconds: "
-                + ", ".join(missing)
-            )
-
-        ensure_common_utils()
+        self.name = name
 
         conn = get_connection()
         cur = conn.cursor()
@@ -60,26 +38,24 @@ class Toolkit:
         )
         row = cur.fetchone()
 
-        # CASE 1: Toolkit exists
+        # Fetch-only mode
+        if url is None:
+            if not row:
+                raise KeyError(f"No Toolkit found for '{name}'")
+            self.url = row[0]
+            return
+
+        # Create/update mode
         if row:
             existing_url = row[0]
-
-            if url and existing_url != url:
-                # Update if URL changed
+            if existing_url != url:
                 cur.execute(
                     "UPDATE Toolkit SET toolkit_url = ? WHERE toolkit_id = ?",
                     (url, name)
                 )
                 conn.commit()
-                self.url = url
-            else:
-                self.url = existing_url
-
-        # CASE 2: Toolkit does not exist
+            self.url = url
         else:
-            if not url:
-                raise KeyError(f"No Toolkit found for '{name}', and no 'url' was provided.")
-
             cur.execute(
                 "INSERT INTO Toolkit (toolkit_id, toolkit_url) VALUES (?, ?)",
                 (name, url)
@@ -87,12 +63,37 @@ class Toolkit:
             conn.commit()
             self.url = url
 
-        self.name = name
+        self.ensure_runtime_classes()
+
+    def ensure_runtime_classes(self) -> None:
+        Message('ToolRequest', ToolRequest, message_type='Request')
+        Message('ToolResponse', ToolResponse, message_type='Response')
+
+        irispy = get_connection(True)
+
+        deps = ['Agents.Message.ToolRequest', 'Agents.Message.ToolResponse']
+        deadline = time.time() + 10.0
+        missing = deps[:]
+
+        while time.time() < deadline:
+            missing = [
+                dep for dep in deps
+                if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', dep)) != 1
+            ]
+            if not missing:
+                break
+            time.sleep(0.25)
+
+        if missing:
+            raise RuntimeError(
+                "Dependency classes still missing after 10 seconds: "
+                + ", ".join(missing)
+            )
+
+        ensure_common_utils()
 
         cls_name = f'Agents.Operation.Toolkit{self.name}'
 
-        # parse host/port/path
-        from urllib.parse import urlparse
         parsed = urlparse(self.url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -248,7 +249,6 @@ class Toolkit:
             Set sc = ..PostRaw(sessionId, call.%ToJSON(), .pBody, .httpStatus)
             If $$$ISERR(sc) Quit sc
 
-            // retry once if session is stale
             If (httpStatus=401) ! (pBody["invalid session") ! (pBody["MCP-Session-Id") {{
                 Set sc = ..InitializeSession(.sessionId)
                 If $$$ISERR(sc) Quit sc
