@@ -58,10 +58,10 @@ This project provides an effective way to:
 - Create a `.env` file similar to this (Note the port is the superserver port)
   ```
   OPENAI_API_KEY="sk..."
-  IRIS_HOSTNAME=localhost
-  IRIS_PORT=1972
-  IRIS_USERNAME=_SYSTEM
-  IRIS_PASSWORD=SYS
+  IRIS_HOSTNAME = '127.0.0.1'
+  IRIS_PORT = 1972
+  IRIS_USERNAME = 'SuperUser'
+  IRIS_PASSWORD = 'SYS'
   ```
 - Modify `server.py` to configure port if needed, then run the tool server
   ```bash
