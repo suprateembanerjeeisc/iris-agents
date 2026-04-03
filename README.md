@@ -60,7 +60,6 @@ This project provides an effective way to:
   OPENAI_API_KEY="sk..."
   IRIS_HOSTNAME=localhost
   IRIS_PORT=1972
-  IRIS_NAMESPACE=SuperUser
   IRIS_USERNAME=_SYSTEM
   IRIS_PASSWORD=SYS
   ```
