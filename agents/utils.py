@@ -71,9 +71,10 @@ def ensure_chat_table():
             pass
     
 
-def get_connection(obj=False):
-    ensure_agents_namespace("Agents")
-    return connect("Agents", obj=obj)
+def get_connection(obj=False, namespace='Agents'):
+    if namespace=='Agents':
+        ensure_agents_namespace(namespace)
+    return connect(namespace, obj)
 
 def create_class(cls_name: str, cls_text: str) -> None:
     irispy = get_connection(True)
