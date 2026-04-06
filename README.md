@@ -63,9 +63,10 @@ This project provides an effective way to:
   IRIS_USERNAME = 'SuperUser'
   IRIS_PASSWORD = 'SYS'
   ```
-- Modify `server.py` to configure port if needed, then run the tool server
+- Modify `server.py` and `iris_mcp.py` to configure port if needed, then run both servers
   ```bash
   python server.py
+  python iris_mcp.py
   ```
 - Run demo.ipynb
   
