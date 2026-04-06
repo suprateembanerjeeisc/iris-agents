@@ -6,7 +6,7 @@ import os
 from .Toolkit import Toolkit
 from .Message import Message
 from .Agent import Agent
-from .models import LLMRequest, LLMResponse, Request, Response
+from .models import LLMRequest, LLMResponse, Request, Response, LLMOutput
 from .utils import get_connection, create_class, ensure_common_utils, ensure_production_utils
 
 load_dotenv()
@@ -87,10 +87,115 @@ class Production:
         except Exception:
             pass
 
+    def ensure_llm_usage_table(self):
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.Tables
+            WHERE TABLE_TYPE='BASE TABLE'
+            AND TABLE_SCHEMA='SQLUser'
+            AND TABLE_NAME='Usage'
+        """)
+        row = cur.fetchone()
+
+        if not row:
+            cur.execute("""
+                CREATE TABLE Usage (
+                    usage_id BIGINT IDENTITY PRIMARY KEY,
+                    usage_ts TIMESTAMP NOT NULL,
+                    chat_id VARCHAR(200),
+                    agent_name VARCHAR(200),
+                    production_name VARCHAR(200),
+                    model VARCHAR(200),
+                    input_tokens BIGINT,
+                    output_tokens BIGINT,
+                    total_tokens BIGINT,
+                    input_cached_tokens BIGINT,
+                    input_audio_tokens BIGINT,
+                    output_audio_tokens BIGINT,
+                    output_reasoning_tokens BIGINT
+                )
+            """)
+            conn.commit()
+
+        try:
+            cur.execute("CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)")
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            cur.execute("CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)")
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            cur.execute("CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)")
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            cur.execute("CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)")
+            conn.commit()
+        except Exception:
+            pass
+
+    def usage(
+        self,
+        agents: list[Agent] | None = None,
+        model: str | None = None,
+    ) -> dict:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        sql = """
+            SELECT
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(output_reasoning_tokens), 0),
+                COALESCE(SUM(total_tokens), 0)
+            FROM SQLUser.Usage
+            WHERE production_name = ?
+        """
+        params = [self.name]
+
+        agent_names = None
+        if agents is not None:
+            if not isinstance(agents, list):
+                raise TypeError("agents must be list[Agent] | None")
+            if any(not isinstance(agent, Agent) for agent in agents):
+                raise TypeError("all items in agents must be Agent objects")
+
+            agent_names = [agent.name for agent in agents]
+
+            if agent_names:
+                placeholders = ", ".join("?" for _ in agent_names)
+                sql += f" AND agent_name IN ({placeholders})"
+                params.extend(agent_names)
+
+        if model is not None:
+            sql += " AND model = ?"
+            params.append(model)
+
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+
+        return {
+            "input_tokens": int(row[0] or 0),
+            "output_tokens": int(row[1] or 0),
+            "output_reasoning_tokens": int(row[2] or 0),
+            "total_tokens": int(row[3] or 0),
+        }
+
     def create_models(self):
 
         Message('LLMRequest', LLMRequest, 'Request')
         Message('LLMResponse', LLMResponse, 'Response')
+        Message('LLMOutput', LLMOutput, 'Response')
         Message('Request', Request, message_type='Request')
         Message('Response', Response, 'Response')
 
@@ -150,9 +255,9 @@ class Production:
 
             Set fmt = ##class(%DynamicObject).%New()
             Do fmt.%Set("type", "json_schema")
-            Do fmt.%Set("name", "LLMResponse")
+            Do fmt.%Set("name", "LLMOutput")
             Do fmt.%Set("strict", 1)
-            Do fmt.%Set("schema", ##class(Agents.Utils.Production).BuildLLMResponseSchema())
+            Do fmt.%Set("schema", ##class(Agents.Utils.Production).BuildLLMOutputSchema())
 
             Set text = ##class(%DynamicObject).%New()
             Do text.%Set("format", fmt)
@@ -221,6 +326,7 @@ class Production:
             Set raw = ""
             Set outText = ""
             Set hasError = 0
+            Set usageJSON = ""
 
             Set apiKey = ##class(Ens.Config.Credentials).GetValue("OPENAI_API_KEY", "Password")
             Set apiKey = $ZSTRIP($Get(apiKey), "<>W")
@@ -266,6 +372,14 @@ class Production:
             If hasError Quit sc
             If hasError Quit sc
 
+            If $IsObject(rawObj), rawObj.%IsDefined("usage") {{
+            Try {{
+                Set usageJSON = rawObj.%Get("usage").%ToJSON()
+            }} Catch ex {{
+                Set usageJSON = ""
+            }}
+            }}
+
             Set outText = ##class(Agents.Utils.Production).ExtractOutputText(raw)
             If outText="" {{
                 Set sc = $$$ERROR($$$GeneralError, "No output_text returned by model. Raw="_raw)
@@ -280,6 +394,7 @@ class Production:
                 Set pResponse.Toolkit = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Toolkit"))
                 Set pResponse.Tool = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Tool"))
                 Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
+                Set pResponse.Usage = usageJSON
             }}Catch ex {{
                 Set sc = $$$ERROR($$$GeneralError, "Model returned invalid wrapper JSON: "_outText)
                 Set hasError = 1
@@ -297,6 +412,7 @@ class Production:
         ensure_production_utils()
         self.create_models()
         self.ensure_tool_usage_table()
+        self.ensure_llm_usage_table()
         self.initialize_LLM()
 
         prod_xml = f'''<Production Name="{self.name}" LogGeneralTraceEvents="false">

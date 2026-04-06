@@ -173,6 +173,30 @@ class Agent:
         '''
         create_class(f'Agents.Gateway.{self.name}Service', cls_text)
 
+    def usage(self) -> dict:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        sql = """
+            SELECT
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(output_reasoning_tokens), 0),
+                COALESCE(SUM(total_tokens), 0)
+            FROM SQLUser.Usage
+            WHERE agent_name = ?
+        """
+
+        cur.execute(sql, [self.name])
+        row = cur.fetchone()
+
+        return {
+            "input_tokens": int(row[0] or 0),
+            "output_tokens": int(row[1] or 0),
+            "output_reasoning_tokens": int(row[2] or 0),
+            "total_tokens": int(row[3] or 0),
+        }
+
     def create_process(self) -> None:
         if self.response_format:
             default_response_cls = f"Agents.Message.{self.response_format.name}"
@@ -370,6 +394,26 @@ class Agent:
             If $$$ISERR(stageSC) {{
                 Quit stageSC
             }}
+            Set stageSC = $$$OK
+            Try {{
+                Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
+                    tChatId,
+                    "{self.name}",
+                    ##class(Agents.Utils.Common).GetRunningProductionName(),
+                    "{self.model}",
+                    tLLMResp.Usage
+                )
+                $$$LOGSTATUS(sc)
+                If $$$ISERR(sc) {{
+                    Set stageSC = sc
+                }}
+            }} Catch ex {{
+                $$$LOGERROR("Stage=LogFirstLLMUsage exception")
+                Set stageSC = ex.AsStatus()
+            }}
+            If $$$ISERR(stageSC) {{
+                Quit stageSC
+            }}
 
             If '$IsObject(tLLMResp) {{
                 Quit $$$ERROR($$$GeneralError,"LLM returned no object")
@@ -473,6 +517,27 @@ class Agent:
                     }}
                 }} Catch ex {{
                     $$$LOGERROR("Stage=NextLLMCall exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
+                            tChatId,
+                            "{self.name}",
+                            ##class(Agents.Utils.Common).GetRunningProductionName(),
+                            "{self.model}",
+                            tLLMResp.Usage
+                        )
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
+                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=LogNextLLMUsage exception")
                     Set stageSC = ex.AsStatus()
                 }}
                 If $$$ISERR(stageSC) {{
@@ -658,7 +723,7 @@ class Agent:
         elif isinstance(chat, str):
             chat_id = chat
         elif chat is None:
-            chat_id = "default"
+            chat_id = ''
         else:
             raise TypeError("chat must be Chat | str | None")
 

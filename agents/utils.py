@@ -104,191 +104,293 @@ def create_class(cls_name: str, cls_text: str) -> None:
 def ensure_common_utils():
     cls_text = r'''Class Agents.Utils.Common Extends %RegisteredObject
     {
-
-    ClassMethod ToText(pData As %RegisteredObject = "") As %String
-    {
-        Set out = ""
-
-        If '$IsObject(pData) {
-            Quit $Get(pData)
+        
+        ClassMethod GetRunningProductionName() As %String
+        {
+            Set prodName = ""
+            Set state = 0
+            Set sc = ##class(Ens.Director).GetProductionStatus(.prodName, .state, 10, 0)
+            If sc '= 1 {
+                Quit ""
+            }
+            If prodName["." {
+                Quit $Piece(prodName,".",*)
+            }
+            Quit prodName
         }
+        
+        ClassMethod LogLLMUsage(
+            pChatId As %String,
+            pAgentName As %String,
+            pProductionName As %String,
+            pModel As %String,
+            pUsageJSON As %String
+        ) As %Status
+        {
+            Set sc = $$$OK
+            Set ts = $ZDATETIME($HOROLOG,3,1,3)
 
-        Set isStream = 0
-        Set isDyn = 0
+            Set inputTokens = ""
+            Set outputTokens = ""
+            Set totalTokens = ""
+            Set inputCachedTokens = ""
+            Set inputAudioTokens = ""
+            Set outputAudioTokens = ""
+            Set outputReasoningTokens = ""
 
-        Try {
-            Set isStream = pData.%IsA("%Stream.Object")
-        } Catch ex {
-            Set isStream = 0
-        }
+            If $Get(pUsageJSON)="" {
+                Quit $$$OK
+            }
 
-        If isStream {
             Try {
-                Do pData.Rewind()
-                While 'pData.AtEnd {
-                    Set out = out _ pData.Read(32000)
+                Set usage = ##class(%DynamicObject).%FromJSON(pUsageJSON)
+
+                If usage.%IsDefined("input_tokens") {
+                    Set inputTokens = +usage.%Get("input_tokens")
+                }
+                If usage.%IsDefined("output_tokens") {
+                    Set outputTokens = +usage.%Get("output_tokens")
+                }
+                If usage.%IsDefined("total_tokens") {
+                    Set totalTokens = +usage.%Get("total_tokens")
+                }
+
+                If usage.%IsDefined("input_tokens_details") {
+                    Set itd = usage.%Get("input_tokens_details")
+                    If $IsObject(itd) {
+                        If itd.%IsDefined("cached_tokens") {
+                            Set inputCachedTokens = +itd.%Get("cached_tokens")
+                        }
+                        If itd.%IsDefined("audio_tokens") {
+                            Set inputAudioTokens = +itd.%Get("audio_tokens")
+                        }
+                    }
+                }
+
+                If usage.%IsDefined("output_tokens_details") {
+                    Set otd = usage.%Get("output_tokens_details")
+                    If $IsObject(otd) {
+                        If otd.%IsDefined("audio_tokens") {
+                            Set outputAudioTokens = +otd.%Get("audio_tokens")
+                        }
+                        If otd.%IsDefined("reasoning_tokens") {
+                            Set outputReasoningTokens = +otd.%Get("reasoning_tokens")
+                        }
+                    }
                 }
             } Catch ex {
-                Set out = ""
+                Set sc = $$$ERROR($$$GeneralError, "Failed to parse usage JSON")
             }
-            Quit out
+            If $$$ISERR(sc) {
+                Quit sc
+            }
+
+            &sql(INSERT INTO SQLUser.Usage
+                (usage_ts, chat_id, agent_name, production_name, model,
+                 input_tokens, output_tokens, total_tokens,
+                 input_cached_tokens, input_audio_tokens, output_audio_tokens,
+                 output_reasoning_tokens)
+                VALUES
+                (:ts, :pChatId, :pAgentName, :pProductionName, :pModel,
+                 :inputTokens, :outputTokens, :totalTokens,
+                 :inputCachedTokens, :inputAudioTokens, :outputAudioTokens,
+                 :outputReasoningTokens))
+
+            If SQLCODE < 0 {
+                Set err = "Failed to insert Usage row. SQLCODE="_SQLCODE
+                If $Get(%msg)'="" {
+                    Set err = err_" MSG="_%msg
+                }
+                Quit $$$ERROR($$$GeneralError, err)
+            }
+
+            Quit $$$OK
         }
 
-        Try {
-            Set isDyn = pData.%IsA("%Library.DynamicAbstractObject")
-        } Catch ex {
+        ClassMethod ToText(pData As %RegisteredObject = "") As %String
+        {
+            Set out = ""
+
+            If '$IsObject(pData) {
+                Quit $Get(pData)
+            }
+
+            Set isStream = 0
             Set isDyn = 0
-        }
 
-        If isDyn {
+            Try {
+                Set isStream = pData.%IsA("%Stream.Object")
+            } Catch ex {
+                Set isStream = 0
+            }
+
+            If isStream {
+                Try {
+                    Do pData.Rewind()
+                    While 'pData.AtEnd {
+                        Set out = out _ pData.Read(32000)
+                    }
+                } Catch ex {
+                    Set out = ""
+                }
+                Quit out
+            }
+
+            Try {
+                Set isDyn = pData.%IsA("%Library.DynamicAbstractObject")
+            } Catch ex {
+                Set isDyn = 0
+            }
+
+            If isDyn {
+                Try {
+                    Set out = pData.%ToJSON()
+                } Catch ex {
+                    Set out = ""
+                }
+                Quit out
+            }
+
             Try {
                 Set out = pData.%ToJSON()
             } Catch ex {
                 Set out = ""
             }
+
             Quit out
         }
 
-        Try {
-            Set out = pData.%ToJSON()
-        } Catch ex {
+        ClassMethod ToJSONString(pValue As %RegisteredObject = "") As %String
+        {
             Set out = ""
-        }
 
-        Quit out
-    }
+            If '$IsObject(pValue) {
+                Quit $Get(pValue)
+            }
 
-    ClassMethod ToJSONString(pValue As %RegisteredObject = "") As %String
-    {
-        Set out = ""
-
-        If '$IsObject(pValue) {
-            Quit $Get(pValue)
-        }
-
-        Set isStream = 0
-        Set isDyn = 0
-
-        Try {
-            Set isStream = pValue.%IsA("%Stream.Object")
-        } Catch ex {
             Set isStream = 0
-        }
-
-        If isStream {
-            Set out = ..ToText(pValue)
-            Quit out
-        }
-
-        Try {
-            Set isDyn = pValue.%IsA("%Library.DynamicAbstractObject")
-        } Catch ex {
             Set isDyn = 0
-        }
 
-        If isDyn {
+            Try {
+                Set isStream = pValue.%IsA("%Stream.Object")
+            } Catch ex {
+                Set isStream = 0
+            }
+
+            If isStream {
+                Set out = ..ToText(pValue)
+                Quit out
+            }
+
+            Try {
+                Set isDyn = pValue.%IsA("%Library.DynamicAbstractObject")
+            } Catch ex {
+                Set isDyn = 0
+            }
+
+            If isDyn {
+                Try {
+                    Set out = pValue.%ToJSON()
+                } Catch ex {
+                    Set out = ""
+                }
+                Quit out
+            }
+
             Try {
                 Set out = pValue.%ToJSON()
             } Catch ex {
                 Set out = ""
             }
+
             Quit out
         }
 
-        Try {
-            Set out = pValue.%ToJSON()
-        } Catch ex {
-            Set out = ""
+        ClassMethod ToolResultToChat(toolkit As %String, tool As %String, result As %String) As %String
+        {
+            Set obj = ##class(%DynamicObject).%New()
+            Do obj.%Set("type", "tool_result")
+            Do obj.%Set("toolkit", ..ToJSONString(toolkit))
+            Do obj.%Set("tool", ..ToJSONString(tool))
+            Do obj.%Set("result", ..ToJSONString(result))
+            Quit obj.%ToJSON()
         }
 
-        Quit out
-    }
-
-    ClassMethod ToolResultToChat(toolkit As %String, tool As %String, result As %String) As %String
-    {
-        Set obj = ##class(%DynamicObject).%New()
-        Do obj.%Set("type", "tool_result")
-        Do obj.%Set("toolkit", ..ToJSONString(toolkit))
-        Do obj.%Set("tool", ..ToJSONString(tool))
-        Do obj.%Set("result", ..ToJSONString(result))
-        Quit obj.%ToJSON()
-    }
-
-    ClassMethod BuildToolResultMessage(toolkit As %String, tool As %String, result As %String) As %DynamicObject
-    {
-        Set msg = ##class(%DynamicObject).%New()
-        Do msg.%Set("role", "developer")
-        Do msg.%Set("content", ..ToolResultToChat(toolkit, tool, result))
-        Quit msg
-    }
-
-    ClassMethod AppendChat(chatId As %String, messageRole As %String, msg As %String) As %Status
-    {
-        If $Get(chatId)="" Quit $$$OK
-
-        &sql(INSERT INTO SQLUser.Chat (id, message_role, message)
-            VALUES (:chatId, :messageRole, :msg))
-
-        If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
-        Quit $$$OK
-    }
-
-    ClassMethod ImportJSONToResponse(
-        json As %String,
-        responseClass As %String,
-        Output response As %Library.Persistent
-    ) As %Status
-    {
-        Set jsonText = ..ToJSONString(json)
-        If jsonText="" {
-            Quit $$$ERROR($$$GeneralError,"Empty JSON content for response import")
+        ClassMethod BuildToolResultMessage(toolkit As %String, tool As %String, result As %String) As %DynamicObject
+        {
+            Set msg = ##class(%DynamicObject).%New()
+            Do msg.%Set("role", "developer")
+            Do msg.%Set("content", ..ToolResultToChat(toolkit, tool, result))
+            Quit msg
         }
 
-        Set trimmed = $ZSTRIP(jsonText,"<>W")
-        If $Extract(trimmed,1)'="{" {
-            Quit $$$ERROR($$$GeneralError,"Response content must be a JSON object")
+        ClassMethod AppendChat(chatId As %String, messageRole As %String, msg As %String) As %Status
+        {
+            If $Get(chatId)="" Quit $$$OK
+
+            &sql(INSERT INTO SQLUser.Chat (id, message_role, message)
+                VALUES (:chatId, :messageRole, :msg))
+
+            If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
+            Quit $$$OK
         }
 
-        Try {
-            Set response = $classmethod(responseClass, "%New")
-            Set stream = ##class(%Stream.GlobalCharacter).%New()
-            Do stream.Write(jsonText)
-            Do stream.Rewind()
-            Return response.%JSONImport(stream)
-        } Catch ex {
-            Return ex.AsStatus()
-        }
-    }
-
-    ClassMethod LogToolUsage(
-        pChatId As %String,
-        pAgentName As %String,
-        pToolkit As %String,
-        pTool As %String,
-        pRequestPayload As %String,
-        pResponseOk As %Integer,
-        pResponsePayload As %String
-    ) As %Status
-    {
-        Set ts = $ZDATETIME($HOROLOG,3,1,3)
-        Set req = $Extract($Get(pRequestPayload),1,200000)
-        Set resp = $Extract($Get(pResponsePayload),1,200000)
-
-        &sql(INSERT INTO SQLUser.ToolUsage
-            (usage_ts, chat_id, agent_name, toolkit, tool_name, request_payload, response_ok, response_payload)
-            VALUES
-            (:ts, :pChatId, :pAgentName, :pToolkit, :pTool, :req, :pResponseOk, :resp))
-
-        If SQLCODE < 0 {
-            Set err = "Failed to insert ToolUsage row. SQLCODE="_SQLCODE
-            If $Get(%msg)'="" {
-                Set err = err_" MSG="_%msg
+        ClassMethod ImportJSONToResponse(
+            json As %String,
+            responseClass As %String,
+            Output response As %Library.Persistent
+        ) As %Status
+        {
+            Set jsonText = ..ToJSONString(json)
+            If jsonText="" {
+                Quit $$$ERROR($$$GeneralError,"Empty JSON content for response import")
             }
-            Quit $$$ERROR($$$GeneralError, err)
+
+            Set trimmed = $ZSTRIP(jsonText,"<>W")
+            If $Extract(trimmed,1)'="{" {
+                Quit $$$ERROR($$$GeneralError,"Response content must be a JSON object")
+            }
+
+            Try {
+                Set response = $classmethod(responseClass, "%New")
+                Set stream = ##class(%Stream.GlobalCharacter).%New()
+                Do stream.Write(jsonText)
+                Do stream.Rewind()
+                Return response.%JSONImport(stream)
+            } Catch ex {
+                Return ex.AsStatus()
+            }
         }
 
-        Quit $$$OK
-    }
+        ClassMethod LogToolUsage(
+            pChatId As %String,
+            pAgentName As %String,
+            pToolkit As %String,
+            pTool As %String,
+            pRequestPayload As %String,
+            pResponseOk As %Integer,
+            pResponsePayload As %String
+        ) As %Status
+        {
+            Set ts = $ZDATETIME($HOROLOG,3,1,3)
+            Set req = $Extract($Get(pRequestPayload),1,200000)
+            Set resp = $Extract($Get(pResponsePayload),1,200000)
+
+            &sql(INSERT INTO SQLUser.ToolUsage
+                (usage_ts, chat_id, agent_name, toolkit, tool_name, request_payload, response_ok, response_payload)
+                VALUES
+                (:ts, :pChatId, :pAgentName, :pToolkit, :pTool, :req, :pResponseOk, :resp))
+
+            If SQLCODE < 0 {
+                Set err = "Failed to insert ToolUsage row. SQLCODE="_SQLCODE
+                If $Get(%msg)'="" {
+                    Set err = err_" MSG="_%msg
+                }
+                Quit $$$ERROR($$$GeneralError, err)
+            }
+
+            Quit $$$OK
+        }
 
     }'''
     create_class('Agents.Utils.Common', cls_text)
@@ -536,7 +638,7 @@ def ensure_production_utils():
             Quit schema
         }}
 
-        ClassMethod BuildLLMResponseSchema() As %DynamicObject
+        ClassMethod BuildLLMOutputSchema() As %DynamicObject
         {{
             Set schema = ##class(%DynamicObject).%New()
             Do schema.%Set("type","object")

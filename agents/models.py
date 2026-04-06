@@ -5,6 +5,12 @@ class MessageType(Enum):
     REQ = 'Request'
     RES = 'Response'
 
+class LLMOutput(BaseModel):
+    is_tool: bool
+    toolkit: str
+    tool: str
+    content: str
+
 class LLMRequest(BaseModel):
     model: str
     responseType: str
@@ -15,6 +21,7 @@ class LLMResponse(BaseModel):
     toolkit: str
     tool: str
     content: str
+    usage: str
 
 class ToolRequest(BaseModel):
     id: str

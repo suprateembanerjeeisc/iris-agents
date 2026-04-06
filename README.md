@@ -163,7 +163,26 @@ Agents must be added to a Production before they can be queried. The Production 
 
 For every Agent, a corresponding Business Service is created as a Gateway. Once the Production has been created, it needs to be started using `start()`. After that point, agents can be independently called, and as long as they are part of the running Production, they will behave independently.
 ```python
-Production('TestAgentProduction', [molly, alex]).start()
+Production('AgentSpace', [molly, alex]).start()
+```
+### Observability
+Token usage is logged at every LLM and Tool call, and can be tracked at various levels. Production, Agent, and Chat all contain a usage() method, which returns aggregated values per Production, per Agent and per Chat respectively.
+```python
+Production('AgentSpace').usage()
+Agent('Molly').usage()
+Chat('travel').usage()
+```
+A Production usage can be further predicated with `agent_name` and `model` fields.
+```python
+Production('AgentSpace').usage(agents=[Agent('Molly'), Agent('Alex')])
+Production('AgentSpace').usage(model='gpt-5')
+```
+The output of all usage() calls share the same structure:
+```json
+{'input_tokens': 19136,
+ 'output_tokens': 35992,
+ 'output_reasoning_tokens': 28416,
+ 'total_tokens': 55128}
 ```
 ### Messages
 Though the Messages structure is not meant to be used externally, this is used to create representations of Pydantic BaseModels as Objectscript classes. Internally, structured outputs are facilitated by Messages.

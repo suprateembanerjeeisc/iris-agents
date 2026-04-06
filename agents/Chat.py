@@ -77,6 +77,34 @@ class Chat:
 
         self.messages = [{"role": row[0], "content": row[1]} for row in rows]
 
+    def usage(self) -> str:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                COALESCE(SUM(output_reasoning_tokens), 0) AS output_reasoning_tokens,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens
+            FROM SQLUser.Usage
+            WHERE chat_id = ?
+            """,
+            (self.id,),
+        )
+
+        row = cur.fetchone()
+
+        result = {
+            "input_tokens": int(row[0] or 0),
+            "output_tokens": int(row[1] or 0),
+            "output_reasoning_tokens": int(row[2] or 0),
+            "total_tokens": int(row[3] or 0),
+        }
+
+        return json.dumps(result)
+
     def append(self, role: str, content: str) -> None:
         conn = get_connection()
         cur = conn.cursor()
