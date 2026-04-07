@@ -328,6 +328,10 @@ class Agent:
             Set tFinalJSON = ""
             Set toolTurns = 0
             Set maxToolTurns = 3
+            Set tUsageList = ##class(%DynamicArray).%New()
+            Set tAssistantMessageId = ""
+            Set tReasoningTrace = ""
+            Set tReasoningSep = ""
 
             Set tChatId = pRequest.ChatId
             Set tUserMessage = pRequest.Message
@@ -341,16 +345,23 @@ class Agent:
             Set logMsg = "User message="_$Extract($Get(tUserMessage),1,300)
             $$$LOGINFO(logMsg)
 
+            //
+            // Persist the user turn first so BuildChatJSON(chatId, ...) includes it.
+            //
             If tChatId'="" {{
                 Set stageSC = $$$OK
                 Try {{
-                    Set sc = ##class(Agents.Utils.Common).AppendChat(tChatId, "user", tUserMessage)
+                    Set sc = ##class(Agents.Utils.Common).AppendChat(
+                        tChatId,
+                        "user",
+                        tUserMessage
+                    )
                     $$$LOGSTATUS(sc)
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
                 }} Catch ex {{
-                    $$$LOGERROR("Stage=AppendUser exception")
+                    $$$LOGERROR("Stage=AppendUserMessage exception")
                     Set stageSC = ex.AsStatus()
                 }}
                 If $$$ISERR(stageSC) {{
@@ -365,9 +376,23 @@ class Agent:
                 Set tLLMReq.ResponseType = tResponseType
 
                 If tChatId'="" {{
-                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildChatJSON(tChatId, "", ..GetSystemPrompt(), ..BuildToolManifest()))
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
+                        ##class(Agents.Utils.Production).BuildChatJSON(
+                            tChatId,
+                            "",
+                            ..GetSystemPrompt(),
+                            ..BuildToolManifest()
+                        )
+                    )
                 }} Else {{
-                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildChatJSON("", tUserMessage, ..GetSystemPrompt(), ..BuildToolManifest()))
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
+                        ##class(Agents.Utils.Production).BuildChatJSON(
+                            "",
+                            tUserMessage,
+                            ..GetSystemPrompt(),
+                            ..BuildToolManifest()
+                        )
+                    )
                 }}
 
                 Set logMsg = "Stage=BuildFirstLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
@@ -394,15 +419,14 @@ class Agent:
             If $$$ISERR(stageSC) {{
                 Quit stageSC
             }}
+
             Set stageSC = $$$OK
             Try {{
-                Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
-                    tChatId,
-                    "{self.name}",
-                    ##class(Agents.Utils.Common).GetRunningProductionName(),
-                    "{self.model}",
-                    tLLMResp.Usage
-                )
+                If $IsObject(tLLMResp) {{
+                    If tLLMResp.Usage'="" {{
+                        Do tUsageList.%Push(tLLMResp.Usage)
+                    }}
+                }}
                 $$$LOGSTATUS(sc)
                 If $$$ISERR(sc) {{
                     Set stageSC = sc
@@ -417,6 +441,11 @@ class Agent:
 
             If '$IsObject(tLLMResp) {{
                 Quit $$$ERROR($$$GeneralError,"LLM returned no object")
+            }}
+
+            If tLLMResp.ReasoningTrace'="" {{
+                Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
+                Set tReasoningSep = $C(10,10)
             }}
 
             Set toolTurns = 0
@@ -486,15 +515,17 @@ class Agent:
                     Set tLLMReq.Model = "{self.model}"
                     Set tLLMReq.ResponseType = tResponseType
 
-                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(##class(Agents.Utils.Production).BuildNextLLMChatJSON(
-                        tChatId,
-                        tUserMessage,
-                        tLLMResp.Toolkit,
-                        tLLMResp.Tool,
-                        tToolResp.Result,
-                        ..GetSystemPrompt(),
-                        ..BuildToolManifest()
-                    ))
+                    Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
+                        ##class(Agents.Utils.Production).BuildNextLLMChatJSON(
+                            tChatId,
+                            tUserMessage,
+                            tLLMResp.Toolkit,
+                            tLLMResp.Tool,
+                            tToolResp.Result,
+                            ..GetSystemPrompt(),
+                            ..BuildToolManifest()
+                        )
+                    )
 
                     Set logMsg = "Stage=BuildNextLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
                     $$$LOGINFO(logMsg)
@@ -523,15 +554,14 @@ class Agent:
                     Set stopLoop = 1
                     Quit
                 }}
+
                 Set stageSC = $$$OK
                 Try {{
-                    Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
-                            tChatId,
-                            "{self.name}",
-                            ##class(Agents.Utils.Common).GetRunningProductionName(),
-                            "{self.model}",
-                            tLLMResp.Usage
-                        )
+                    If $IsObject(tLLMResp) {{
+                        If tLLMResp.Usage'="" {{
+                            Do tUsageList.%Push(tLLMResp.Usage)
+                        }}
+                    }}
                     $$$LOGSTATUS(sc)
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
@@ -549,6 +579,11 @@ class Agent:
                     Set stageSC = $$$ERROR($$$GeneralError,"LLM returned no object during tool chain")
                     Set stopLoop = 1
                     Quit
+                }}
+
+                If tLLMResp.ReasoningTrace'="" {{
+                    Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
+                    Set tReasoningSep = $C(10,10)
                 }}
             }}
 
@@ -584,7 +619,13 @@ class Agent:
             If tChatId'="" {{
                 Set stageSC = $$$OK
                 Try {{
-                    Set sc = ##class(Agents.Utils.Common).AppendChat(tChatId, "assistant", tFinalJSON)
+                    Set sc = ##class(Agents.Utils.Common).AppendChatReturnMessageId(
+                        tChatId,
+                        "assistant",
+                        tFinalJSON,
+                        tReasoningTrace,
+                        .tAssistantMessageId
+                    )
                     $$$LOGSTATUS(sc)
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
@@ -595,6 +636,33 @@ class Agent:
                 }}
                 If $$$ISERR(stageSC) {{
                     Quit stageSC
+                }}
+            }}
+
+            If tChatId'="", (tAssistantMessageId'="") {{
+                For i=0:1:tUsageList.%Size()-1 {{
+                    Set oneUsage = tUsageList.%Get(i)
+                    Set stageSC = $$$OK
+                    Try {{
+                        Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
+                            tChatId,
+                            tAssistantMessageId,
+                            "{self.name}",
+                            ##class(Agents.Utils.Common).GetRunningProductionName(),
+                            "{self.model}",
+                            oneUsage
+                        )
+                        $$$LOGSTATUS(sc)
+                        If $$$ISERR(sc) {{
+                            Set stageSC = sc
+                        }}
+                    }} Catch ex {{
+                        $$$LOGERROR("Stage=LogBufferedLLMUsage exception")
+                        Set stageSC = ex.AsStatus()
+                    }}
+                    If $$$ISERR(stageSC) {{
+                        Quit stageSC
+                    }}
                 }}
             }}
 

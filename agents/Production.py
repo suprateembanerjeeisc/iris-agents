@@ -106,6 +106,7 @@ class Production:
                     usage_id BIGINT IDENTITY PRIMARY KEY,
                     usage_ts TIMESTAMP NOT NULL,
                     chat_id VARCHAR(200),
+                    message_id BIGINT,
                     agent_name VARCHAR(200),
                     production_name VARCHAR(200),
                     model VARCHAR(200),
@@ -115,10 +116,39 @@ class Production:
                     input_cached_tokens BIGINT,
                     input_audio_tokens BIGINT,
                     output_audio_tokens BIGINT,
-                    output_reasoning_tokens BIGINT
+                    output_reasoning_tokens BIGINT,
+                    duration_ms BIGINT
                 )
             """)
             conn.commit()
+        else:
+            cur.execute("""
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA='SQLUser'
+                AND TABLE_NAME='Usage'
+                AND COLUMN_NAME='message_id'
+            """)
+            if not cur.fetchone():
+                cur.execute("""
+                    ALTER TABLE SQLUser.Usage
+                    ADD message_id BIGINT
+                """)
+                conn.commit()
+
+            cur.execute("""
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA='SQLUser'
+                AND TABLE_NAME='Usage'
+                AND COLUMN_NAME='duration_ms'
+            """)
+            if not cur.fetchone():
+                cur.execute("""
+                    ALTER TABLE SQLUser.Usage
+                    ADD duration_ms BIGINT
+                """)
+                conn.commit()
 
         try:
             cur.execute("CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)")
@@ -212,7 +242,7 @@ class Production:
         </MapItem>
         }}
 
-        ClassMethod PostResponses(model As %String, inputJson As %String, apiKey As %String, responseType As %String) As %String
+        ClassMethod PostResponses(model As %String, inputJson As %String, apiKey As %String, responseType As %String, Output pDurationMs As %BigInt = "") As %String
         {{
             Set contentSchema = ##class(Agents.Utils.Production).BuildContentSchema(responseType)
             Set contentSchemaText = contentSchema.%ToJSON()
@@ -253,6 +283,11 @@ class Production:
             Do body.%Set("model", model)
             Do body.%Set("input", finalInput)
 
+            Set reasoning = ##class(%DynamicObject).%New()
+            Do reasoning.%Set("effort", "medium")
+            Do reasoning.%Set("summary", "detailed")
+            Do body.%Set("reasoning", reasoning)
+
             Set fmt = ##class(%DynamicObject).%New()
             Do fmt.%Set("type", "json_schema")
             Do fmt.%Set("name", "LLMOutput")
@@ -292,7 +327,10 @@ class Production:
             Do http.EntityBody.Write(json)
             Do http.EntityBody.Rewind()
 
+            Set tStart = $ZHOROLOG
             Set sc = http.Post("/v1/responses")
+            Set tEnd = $ZHOROLOG
+            Set pDurationMs = ##class(Agents.Utils.Common).ElapsedMs(tStart, tEnd)
             If $$$ISERR(sc) {{
                 Set err = $SYSTEM.Status.GetErrorText(sc)
                 Set sslcfg = http.SSLConfiguration
@@ -327,12 +365,14 @@ class Production:
             Set outText = ""
             Set hasError = 0
             Set usageJSON = ""
+            Set durationMs = ""
+            Set reasoningTrace = ""
 
             Set apiKey = ##class(Ens.Config.Credentials).GetValue("OPENAI_API_KEY", "Password")
             Set apiKey = $ZSTRIP($Get(apiKey), "<>W")
             Set apiKey = $TR(apiKey, $CHAR(13,10), "")
 
-            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, apiKey, pRequest.ResponseType)
+            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, apiKey, pRequest.ResponseType, .durationMs)
 
             Try {{
                 Set rawObj = ##class(%DynamicObject).%FromJSON(raw)
@@ -373,13 +413,17 @@ class Production:
             If hasError Quit sc
 
             If $IsObject(rawObj), rawObj.%IsDefined("usage") {{
-            Try {{
-                Set usageJSON = rawObj.%Get("usage").%ToJSON()
-            }} Catch ex {{
-                Set usageJSON = ""
+                Try {{
+                    Set usageObj = rawObj.%Get("usage")
+                    If durationMs'="" {{
+                        Do usageObj.%Set("duration_ms", +durationMs)
+                    }}
+                    Set usageJSON = usageObj.%ToJSON()
+                }} Catch ex {{
+                    Set usageJSON = ""
+                }}
             }}
-            }}
-
+            Set reasoningTrace = ##class(Agents.Utils.Production).ExtractReasoningTrace(raw)
             Set outText = ##class(Agents.Utils.Production).ExtractOutputText(raw)
             If outText="" {{
                 Set sc = $$$ERROR($$$GeneralError, "No output_text returned by model. Raw="_raw)
@@ -395,6 +439,7 @@ class Production:
                 Set pResponse.Tool = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Tool"))
                 Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
                 Set pResponse.Usage = usageJSON
+                Set pResponse.ReasoningTrace = reasoningTrace
             }}Catch ex {{
                 Set sc = $$$ERROR($$$GeneralError, "Model returned invalid wrapper JSON: "_outText)
                 Set hasError = 1

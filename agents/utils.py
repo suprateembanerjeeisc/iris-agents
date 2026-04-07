@@ -45,21 +45,22 @@ def ensure_chat_table():
     cur = conn.cursor()
 
     sql = """
-            SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.Tables
-            WHERE TABLE_TYPE='BASE TABLE'
-            AND TABLE_SCHEMA='SQLUser'
-        """
+        SELECT TABLE_NAME
+        FROM INFORMATION_SCHEMA.Tables
+        WHERE TABLE_TYPE='BASE TABLE'
+        AND TABLE_SCHEMA='SQLUser'
+    """
     cur.execute(sql)
     tables = [row[0] for row in cur.fetchall()]
 
     if "Chat" not in tables:
         cur.execute("""
             CREATE TABLE Chat (
-                message_id INTEGER IDENTITY PRIMARY KEY,
+                message_id BIGINT IDENTITY PRIMARY KEY,
                 id VARCHAR(200) NOT NULL,
                 message_role VARCHAR(50) NOT NULL,
-                message VARCHAR(50000) NOT NULL
+                message VARCHAR(50000) NOT NULL,
+                reasoning_trace VARCHAR(50000)
             )
         """)
         conn.commit()
@@ -69,6 +70,20 @@ def ensure_chat_table():
             conn.commit()
         except Exception:
             pass
+    else:
+        cur.execute("""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA='SQLUser'
+              AND TABLE_NAME='Chat'
+              AND COLUMN_NAME='reasoning_trace'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE SQLUser.Chat
+                ADD reasoning_trace VARCHAR(50000)
+            """)
+            conn.commit()
     
 
 def get_connection(obj=False, namespace='Agents'):
@@ -104,7 +119,55 @@ def create_class(cls_name: str, cls_text: str) -> None:
 def ensure_common_utils():
     cls_text = r'''Class Agents.Utils.Common Extends %RegisteredObject
     {
-        
+
+        ClassMethod AppendChatReturnMessageId(
+            chatId As %String,
+            messageRole As %String,
+            msg As %String,
+            reasoningTrace As %String = "",
+            Output pMessageId As %BigInt
+        ) As %Status
+        {
+            Set pMessageId = ""
+            If $Get(chatId)="" Quit $$$OK
+
+            &sql(INSERT INTO SQLUser.Chat
+                (id, message_role, message, reasoning_trace)
+                VALUES
+                (:chatId, :messageRole, :msg, :reasoningTrace))
+
+            If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
+
+            &sql(SELECT LAST_IDENTITY() INTO :pMessageId)
+
+            If SQLCODE<0 {
+                Quit $$$ERROR($$$GeneralError,"Chat row inserted but failed to fetch message_id")
+            }
+
+            Quit $$$OK
+        }
+
+        ClassMethod ElapsedMs(pStart As %String, pEnd As %String) As %BigInt
+        {
+            Set ms = 0
+
+            Try {
+                Set start = +pStart
+                Set finish = +pEnd
+                Set ms = (finish - start) * 1000
+
+                If ms < 0 {
+                    Set ms = 0
+                } Else {
+                    Set ms = +ms
+                }
+            } Catch ex {
+                Set ms = 0
+            }
+
+            Quit ms
+        }
+
         ClassMethod GetRunningProductionName() As %String
         {
             Set prodName = ""
@@ -121,6 +184,7 @@ def ensure_common_utils():
         
         ClassMethod LogLLMUsage(
             pChatId As %String,
+            pMessageId As %BigInt,
             pAgentName As %String,
             pProductionName As %String,
             pModel As %String,
@@ -137,6 +201,7 @@ def ensure_common_utils():
             Set inputAudioTokens = ""
             Set outputAudioTokens = ""
             Set outputReasoningTokens = ""
+            Set durationMs = ""
 
             If $Get(pUsageJSON)="" {
                 Quit $$$OK
@@ -153,6 +218,9 @@ def ensure_common_utils():
                 }
                 If usage.%IsDefined("total_tokens") {
                     Set totalTokens = +usage.%Get("total_tokens")
+                }
+                If usage.%IsDefined("duration_ms") {
+                    Set durationMs = +usage.%Get("duration_ms")
                 }
 
                 If usage.%IsDefined("input_tokens_details") {
@@ -186,15 +254,15 @@ def ensure_common_utils():
             }
 
             &sql(INSERT INTO SQLUser.Usage
-                (usage_ts, chat_id, agent_name, production_name, model,
-                 input_tokens, output_tokens, total_tokens,
-                 input_cached_tokens, input_audio_tokens, output_audio_tokens,
-                 output_reasoning_tokens)
-                VALUES
-                (:ts, :pChatId, :pAgentName, :pProductionName, :pModel,
-                 :inputTokens, :outputTokens, :totalTokens,
-                 :inputCachedTokens, :inputAudioTokens, :outputAudioTokens,
-                 :outputReasoningTokens))
+            (usage_ts, chat_id, message_id, agent_name, production_name, model,
+            input_tokens, output_tokens, total_tokens,
+            input_cached_tokens, input_audio_tokens, output_audio_tokens,
+            output_reasoning_tokens, duration_ms)
+            VALUES
+            (:ts, :pChatId, :pMessageId, :pAgentName, :pProductionName, :pModel,
+            :inputTokens, :outputTokens, :totalTokens,
+            :inputCachedTokens, :inputAudioTokens, :outputAudioTokens,
+            :outputReasoningTokens, :durationMs))
 
             If SQLCODE < 0 {
                 Set err = "Failed to insert Usage row. SQLCODE="_SQLCODE
@@ -401,6 +469,45 @@ def ensure_production_utils():
     
     cls_text = f'''Class Agents.Utils.Production Extends %RegisteredObject
     {{
+    
+        ClassMethod ExtractReasoningTrace(respJson As %String) As %String
+        {{
+            Set trace = ""
+            Set sep = ""
+
+            Try {{
+                Set obj = ##class(%DynamicObject).%FromJSON(respJson)
+                Set out = obj.%Get("output")
+                
+                If out'= ""{{
+
+                    For i=0:1:out.%Size()-1 {{
+                        Set item = out.%Get(i)
+                        If item.%Get("type")'="reasoning" Continue
+
+                        If 'item.%IsDefined("summary") Continue
+                        Set summary = item.%Get("summary")
+                        If summary="" Continue
+
+                        For j=0:1:summary.%Size()-1 {{
+                            Set part = summary.%Get(j)
+                            If part.%Get("type")="summary_text" {{
+                                Set text = part.%Get("text")
+                                If text'="" {{
+                                    Set trace = trace _ sep _ text
+                                    Set sep = $C(10)
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }} Catch ex {{
+                Set trace = ""
+            }}
+
+            Quit trace
+        }}
+
         ClassMethod BuildNextLLMChatJSON(
             chatId As %String,
             userText As %String = "",
@@ -691,7 +798,6 @@ def ensure_production_utils():
 
             Return outText
         }}
-
     }}
     '''
     create_class('Agents.Utils.Production', cls_text)

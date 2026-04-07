@@ -26,10 +26,11 @@ class Chat:
         if "Chat" not in tables:
             cur.execute("""
                 CREATE TABLE Chat (
-                    message_id INTEGER IDENTITY PRIMARY KEY,
+                    message_id BIGINT IDENTITY PRIMARY KEY,
                     id VARCHAR(200) NOT NULL,
                     message_role VARCHAR(50) NOT NULL,
-                    message VARCHAR(50000) NOT NULL
+                    message VARCHAR(50000) NOT NULL,
+                    reasoning_trace VARCHAR(50000)
                 )
             """)
             conn.commit()
