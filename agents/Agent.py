@@ -639,30 +639,28 @@ class Agent:
                 }}
             }}
 
-            If tChatId'="", (tAssistantMessageId'="") {{
-                For i=0:1:tUsageList.%Size()-1 {{
-                    Set oneUsage = tUsageList.%Get(i)
-                    Set stageSC = $$$OK
-                    Try {{
-                        Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
-                            tChatId,
-                            tAssistantMessageId,
-                            "{self.name}",
-                            ##class(Agents.Utils.Common).GetRunningProductionName(),
-                            "{self.model}",
-                            oneUsage
-                        )
-                        $$$LOGSTATUS(sc)
-                        If $$$ISERR(sc) {{
-                            Set stageSC = sc
-                        }}
-                    }} Catch ex {{
-                        $$$LOGERROR("Stage=LogBufferedLLMUsage exception")
-                        Set stageSC = ex.AsStatus()
+            For i=0:1:tUsageList.%Size()-1 {{
+                Set oneUsage = tUsageList.%Get(i)
+                Set stageSC = $$$OK
+                Try {{
+                    Set sc = ##class(Agents.Utils.Common).LogLLMUsage(
+                        tChatId,
+                        tAssistantMessageId,
+                        "{self.name}",
+                        ##class(Agents.Utils.Common).GetRunningProductionName(),
+                        "{self.model}",
+                        oneUsage
+                    )
+                    $$$LOGSTATUS(sc)
+                    If $$$ISERR(sc) {{
+                        Set stageSC = sc
                     }}
-                    If $$$ISERR(stageSC) {{
-                        Quit stageSC
-                    }}
+                }} Catch ex {{
+                    $$$LOGERROR("Stage=LogBufferedLLMUsage exception")
+                    Set stageSC = ex.AsStatus()
+                }}
+                If $$$ISERR(stageSC) {{
+                    Quit stageSC
                 }}
             }}
 
