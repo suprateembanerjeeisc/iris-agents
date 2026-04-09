@@ -475,35 +475,166 @@ def ensure_production_utils():
         {{
             Set trace = ""
             Set sep = ""
+            Set found = 0
 
             Try {{
                 Set obj = ##class(%DynamicObject).%FromJSON(respJson)
-                Set out = obj.%Get("output")
-                
-                If out'= ""{{
 
-                    For i=0:1:out.%Size()-1 {{
-                        Set item = out.%Get(i)
-                        If item.%Get("type")'="reasoning" Continue
+                //
+                // 1) Top-level response.reasoning.summary
+                //    Docs show response.reasoning exists and summary may be null.
+                //
+                If obj.%IsDefined("reasoning") {{
+                    Set topReasoning = obj.%Get("reasoning")
+                    If $IsObject(topReasoning) {{
+                        If topReasoning.%IsDefined("summary") {{
+                            Set topSummary = topReasoning.%Get("summary")
 
-                        If 'item.%IsDefined("summary") Continue
-                        Set summary = item.%Get("summary")
-                        If summary="" Continue
+                            If $IsObject(topSummary) {{
+                                // Expected array of summary_text objects
+                                Try {{
+                                    For i=0:1:topSummary.%Size()-1 {{
+                                        Set part = topSummary.%Get(i)
+                                        If '$IsObject(part) Continue
 
-                        For j=0:1:summary.%Size()-1 {{
-                            Set part = summary.%Get(j)
-                            If part.%Get("type")="summary_text" {{
-                                Set text = part.%Get("text")
-                                If text'="" {{
+                                        If part.%IsDefined("text") {{
+                                            Set text = part.%Get("text")
+                                            If text'="" {{
+                                                Set trace = trace _ sep _ text
+                                                Set sep = $C(10)
+                                                Set found = 1
+                                            }}
+                                        }}
+                                    }}
+                                }} Catch ex {{
+                                    // ignore malformed summary container
+                                }}
+                            }} Else {{
+                                // Defensive fallback in case summary comes back scalar-like
+                                Set text = $Get(topSummary)
+                                If text'="", text'="null" {{
                                     Set trace = trace _ sep _ text
                                     Set sep = $C(10)
+                                    Set found = 1
                                 }}
                             }}
                         }}
                     }}
                 }}
+
+                //
+                // 2) output[] reasoning items
+                //    Official schema currently documents:
+                //    - type="reasoning"
+                //    - summary[] of summary_text
+                //    - optional content[] of reasoning_text
+                //    - optional encrypted_content
+                //
+                If obj.%IsDefined("output") {{
+                    Set out = obj.%Get("output")
+
+                    If $IsObject(out) {{
+                        For i=0:1:out.%Size()-1 {{
+                            Set item = out.%Get(i)
+                            If '$IsObject(item) Continue
+                            If item.%Get("type")'="reasoning" Continue
+
+                            //
+                            // 2a) summary[] -> summary_text.text
+                            //
+                            If item.%IsDefined("summary") {{
+                                Set summary = item.%Get("summary")
+                                If $IsObject(summary) {{
+                                    Try {{
+                                        For j=0:1:summary.%Size()-1 {{
+                                            Set part = summary.%Get(j)
+                                            If '$IsObject(part) Continue
+
+                                            Set ptype = ""
+                                            If part.%IsDefined("type") {{
+                                                Set ptype = part.%Get("type")
+                                            }}
+
+                                            If (ptype="summary_text") || (ptype="") {{
+                                                If part.%IsDefined("text") {{
+                                                    Set text = part.%Get("text")
+                                                    If text'="" {{
+                                                        Set trace = trace _ sep _ text
+                                                        Set sep = $C(10)
+                                                        Set found = 1
+                                                    }}
+                                                }}
+                                            }}
+                                        }}
+                                    }} Catch ex {{
+                                        // ignore malformed summary
+                                    }}
+                                }}
+                            }}
+
+                            //
+                            // 2b) content[] -> reasoning_text.text
+                            //
+                            If item.%IsDefined("content") {{
+                                Set content = item.%Get("content")
+                                If $IsObject(content) {{
+                                    Try {{
+                                        For j=0:1:content.%Size()-1 {{
+                                            Set part = content.%Get(j)
+                                            If '$IsObject(part) Continue
+
+                                            Set ptype = ""
+                                            If part.%IsDefined("type") {{
+                                                Set ptype = part.%Get("type")
+                                            }}
+
+                                            If (ptype="reasoning_text") || (ptype="") {{
+                                                If part.%IsDefined("text") {{
+                                                    Set text = part.%Get("text")
+                                                    If text'="" {{
+                                                        Set trace = trace _ sep _ text
+                                                        Set sep = $C(10)
+                                                        Set found = 1
+                                                    }}
+                                                }}
+                                            }}
+                                        }}
+                                    }} Catch ex {{
+                                        // ignore malformed content
+                                    }}
+                                }}
+                            }}
+
+                            //
+                            // 2c) optional encrypted_content
+                            //     This is not human-readable, but if it exists and you want
+                            //     evidence that reasoning was returned, keep it.
+                            //
+                            If 'found {{
+                                If item.%IsDefined("encrypted_content") {{
+                                    Set enc = item.%Get("encrypted_content")
+                                    If enc'="" {{
+                                        Set trace = trace _ sep _ "[encrypted_reasoning] " _ enc
+                                        Set sep = $C(10)
+                                        Set found = 1
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+
             }} Catch ex {{
                 Set trace = ""
+                Set found = 0
+            }}
+
+            //
+            // 3) Final fallback requested by you:
+            //    if blank, dump whole response payload into reasoning_trace
+            //
+            If $ZSTRIP(trace,"<>W")="" {{
+                Set trace = respJson
             }}
 
             Quit trace
