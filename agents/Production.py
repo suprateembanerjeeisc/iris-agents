@@ -235,9 +235,9 @@ class Production:
         Message('Request', Request, message_type='Request')
         Message('Response', Response, 'Response')
 
-    def initialize_LLM(self):
+    def initialize_OpenAI(self):
 
-        cls_text = f'''Class Agents.Operation.LLM Extends Ens.BusinessOperation
+        cls_text = f'''Class Agents.Operation.OpenAI Extends Ens.BusinessOperation
         {{
         Parameter INVOCATION = "Queue";
 
@@ -463,7 +463,7 @@ class Production:
         }}
         }}
         '''
-        create_class('Agents.Operation.LLM', cls_text)
+        create_class('Agents.Operation.OpenAI', cls_text)
 
     def build(self):
         ensure_common_utils()
@@ -471,7 +471,7 @@ class Production:
         self.create_models()
         self.ensure_tool_usage_table()
         self.ensure_llm_usage_table()
-        self.initialize_LLM()
+        self.initialize_OpenAI()
 
         prod_xml = f'''<Production Name="{self.name}" LogGeneralTraceEvents="false">
         <Description></Description>
@@ -495,7 +495,7 @@ class Production:
                         f'PoolSize="1" Enabled="true"/>\n'
                     )
 
-        prod_xml += '<Item Name="LLM" ClassName="Agents.Operation.LLM" PoolSize="1" Enabled="true"/>\n</Production>'
+        prod_xml += '<Item Name="OpenAI" ClassName="Agents.Operation.OpenAI" PoolSize="1" Enabled="true"/>\n</Production>'
 
         cls_text = f"""Class {self.name} Extends Ens.Production
         {{

@@ -22,7 +22,9 @@ class Agent:
         toolkits: list[Toolkit] | None | object = _UNSET,
         response_format: type[BaseModel] | None | object = _UNSET,
         reasoning_effort: str | None = 'medium',
+        debug:bool = False
     ):
+        self.debug = debug
         conn = get_connection()
         cur = conn.cursor()
 
@@ -318,6 +320,21 @@ class Agent:
             Quit $$$OK
         }}
 
+        ClassMethod GetLLMTarget() As %String
+        {{
+            Set model = $ZCONVERT("{self.model}", "L")
+
+            If $Extract(model, 1, 3) = "gpt" {{
+                Quit "OpenAI"
+            }}
+
+            If $Extract(model, 1, 6) = "claude" {{
+                Quit "Claude"
+            }}
+
+            Quit ""
+        }}
+
         Method OnRequest(
             pRequest As %Library.Persistent,
             Output pResponse As %Library.Persistent
@@ -349,10 +366,8 @@ class Agent:
                 Set tReasoningEffort = "medium"
             }}
 
-            Set logMsg = "OnRequest start agent="_..%ConfigName_" chatId="_$Get(tChatId)
-            $$$LOGINFO(logMsg)
-            Set logMsg = "User message="_$Extract($Get(tUserMessage),1,300)
-            $$$LOGINFO(logMsg)
+            {'Set logMsg = "OnRequest start agent="_..%ConfigName_" chatId="_$Get(tChatId)  $$$LOGINFO(logMsg)' if self.debug else ''}
+            {'Set logMsg = "User message="_$Extract($Get(tUserMessage),1,300) $$$LOGINFO(logMsg)' if self.debug else ''}
 
             //
             // Persist the user turn first so BuildChatJSON(chatId, ...) includes it.
@@ -365,7 +380,7 @@ class Agent:
                         "user",
                         tUserMessage
                     )
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -404,9 +419,7 @@ class Agent:
                         )
                     )
                 }}
-
-                Set logMsg = "Stage=BuildFirstLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
-                $$$LOGINFO(logMsg)
+                {'Set logMsg = "Stage=BuildFirstLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
             }} Catch ex {{
                 $$$LOGERROR("Stage=BuildFirstLLMRequest exception")
                 Set stageSC = ex.AsStatus()
@@ -417,8 +430,8 @@ class Agent:
 
             Set stageSC = $$$OK
             Try {{
-                Set sc = ..SendRequestSync("LLM", tLLMReq, .tLLMResp)
-                $$$LOGSTATUS(sc)
+                Set sc = ..SendRequestSync(..GetLLMTarget(), tLLMReq, .tLLMResp)
+                {'$$$LOGSTATUS(sc)' if self.debug else ''}
                 If $$$ISERR(sc) {{
                     Set stageSC = sc
                 }}
@@ -437,7 +450,7 @@ class Agent:
                         Do tUsageList.%Push(tLLMResp.Usage)
                     }}
                 }}
-                $$$LOGSTATUS(sc)
+                {'$$$LOGSTATUS(sc)' if self.debug else ''}
                 If $$$ISERR(sc) {{
                     Set stageSC = sc
                 }}
@@ -474,15 +487,13 @@ class Agent:
                     Quit
                 }}
 
-                Set logMsg = "ToolTurn="_toolTurns_" Toolkit="_tLLMResp.Toolkit_" Tool="_tLLMResp.Tool
-                $$$LOGINFO(logMsg)
-                Set logMsg = "Tool params="_$Extract(##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),1,1000)
-                $$$LOGINFO(logMsg)
+                {'Set logMsg = "ToolTurn="_toolTurns_" Toolkit="_tLLMResp.Toolkit_" Tool="_tLLMResp.Tool $$$LOGINFO(logMsg)' if self.debug else ''}
+                {'Set logMsg = "Tool params="_$Extract(##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),1,1000) $$$LOGINFO(logMsg)' if self.debug else ''}
 
                 Set stageSC = $$$OK
                 Try {{
                     Set sc = ..InvokeTool(tLLMResp.Toolkit, tLLMResp.Tool, tLLMResp.Content, .tToolResp)
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -495,8 +506,7 @@ class Agent:
                     Quit
                 }}
 
-                Set logMsg = "Tool result="_$Extract(##class(Agents.Utils.Common).ToJSONString(tToolResp.Result),1,1500)
-                $$$LOGINFO(logMsg)
+                {'Set logMsg = "Tool result="_$Extract(##class(Agents.Utils.Common).ToJSONString(tToolResp.Result),1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
 
                 Set stageSC = $$$OK
                 Try {{
@@ -509,7 +519,7 @@ class Agent:
                         +tToolResp.OkGet(),
                         ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet())
                     )
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -542,8 +552,7 @@ class Agent:
                         )
                     )
 
-                    Set logMsg = "Stage=BuildNextLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500)
-                    $$$LOGINFO(logMsg)
+                    {'Set logMsg = "Stage=BuildNextLLMRequest chatSample="_$Extract(tLLMReq.Chat,1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
                 }} Catch ex {{
                     $$$LOGERROR("Stage=BuildNextLLMRequest exception")
                     Set stageSC = ex.AsStatus()
@@ -556,8 +565,8 @@ class Agent:
                 Set stageSC = $$$OK
                 Try {{
                     Set tLLMResp = ""
-                    Set sc = ..SendRequestSync("LLM", tLLMReq, .tLLMResp)
-                    $$$LOGSTATUS(sc)
+                    Set sc = ..SendRequestSync(..GetLLMTarget(), tLLMReq, .tLLMResp)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -577,7 +586,7 @@ class Agent:
                             Do tUsageList.%Push(tLLMResp.Usage)
                         }}
                     }}
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -617,13 +626,12 @@ class Agent:
             }}
 
             Set tFinalJSON = ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content)
-            Set logMsg = "Final JSON="_$Extract(tFinalJSON,1,1500)
-            $$$LOGINFO(logMsg)
+            {'Set logMsg = "Final JSON="_$Extract(tFinalJSON,1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
 
             Set stageSC = $$$OK
             Try {{
                 Set sc = ##class(Agents.Utils.Common).ImportJSONToResponse(tFinalJSON, tResponseType, .pResponse)
-                $$$LOGSTATUS(sc)
+                {'$$$LOGSTATUS(sc)' if self.debug else ''}
                 If $$$ISERR(sc) {{
                     Set stageSC = sc
                 }}
@@ -646,7 +654,7 @@ class Agent:
                         tLatestResponseOutput,
                         .tAssistantMessageId
                     )
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
@@ -672,7 +680,7 @@ class Agent:
                         tReasoningEffort,
                         oneUsage
                     )
-                    $$$LOGSTATUS(sc)
+                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
                         Set stageSC = sc
                     }}
