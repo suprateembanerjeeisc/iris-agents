@@ -127,7 +127,7 @@ utils_toolkit = Toolkit(name = 'Utilities', url = 'http://localhost:8000/mcp')
 
 ### Agent
 
-The Agent, its specification, its messages and its Tool Calling behavior is persisted across several tables in IRIS. An Agent can be configured with a set of tools, a system prompt, a model, and a default structured output schema.
+The Agent, its specification, its messages and its Tool Calling behavior is persisted across several tables in IRIS. An Agent can be configured with a set of tools, a system prompt, a model, a default reasoning effort, and a default structured output schema.
 ```python
 class MollyResponse(BaseModel):
     text: str
@@ -138,6 +138,7 @@ molly = Agent(name='Molly',
              system_prompt=Prompt(name='molly_system', text='You are a helpful agent'),
              model='gpt-5',
              toolkits=[utils_toolkit],
+             reasoning_effort='low',
              response_format=MollyResponse)
 ```
 Agents can be operated once they have been added to a Production (see below) in stateful or stateless ways
@@ -145,7 +146,7 @@ Agents can be operated once they have been added to a Production (see below) in 
 molly(message='Recommend some good food spots for lunch', chat='travel') # Stateful
 molly(message='Recommend some good food spots for lunch')                # Stateless
 ```
-Agents can also be queried for a specified response format at runtime that supersedes their default response format
+An Agent can also be queried for a specified response format and reasoning effort at runtime that supersedes their default settings
 ```python
 class Restaurant(BaseModel):
     name: str
@@ -156,7 +157,13 @@ class TasteAtlas(BaseModel):
     reasoning: str
 
 molly(message='What are some places I would like? I tend to like Italian and Asian cuisines',
-      response_format=TasteAtlas, chat='travel')
+      response_format=TasteAtlas,
+      reasoning_effort='high',
+      chat='travel')
+```
+Agents can also be instantiated in `debug` mode where it logs status and info which can be viewed in Message Viewer
+```python
+molly(message='Recommend some good food spots for lunch', debug=True)                # Stateless
 ```
 ### Production
 Agents must be added to a Production before they can be queried. The Production API stops any running production in the Agents Namespace and starts the specified Production. Agents are implemented as Business Processes, while LLM and Toolkits are implemented as Business Operations. The Production adds all Toolkits among all added agents, even if all Agents may not have access to all Toolkits. 
@@ -177,12 +184,14 @@ A Production usage can be further predicated with `agent_name` and `model` field
 Production('AgentSpace').usage(agents=[Agent('Molly'), Agent('Alex')])
 Production('AgentSpace').usage(model='gpt-5')
 ```
-The output of all usage() calls share the same structure:
+All usage() calls return the same structure:
 ```json
-{'input_tokens': 19136,
- 'output_tokens': 35992,
- 'output_reasoning_tokens': 28416,
- 'total_tokens': 55128}
+{
+  'input_tokens': 19136,
+  'output_tokens': 35992,
+  'output_reasoning_tokens': 28416,
+  'total_tokens': 55128
+}
 ```
 ### Messages
 Though the Messages structure is not meant to be used externally, this is used to create representations of Pydantic BaseModels as Objectscript classes. Internally, structured outputs are facilitated by Messages.
