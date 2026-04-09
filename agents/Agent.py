@@ -336,6 +336,7 @@ class Agent:
             Set tAssistantMessageId = ""
             Set tReasoningTrace = ""
             Set tReasoningSep = ""
+            Set tLatestResponseOutput = ""
 
             Set tChatId = pRequest.ChatId
             Set tUserMessage = pRequest.Message
@@ -456,6 +457,9 @@ class Agent:
                 Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
                 Set tReasoningSep = $C(10,10)
             }}
+            If tLLMResp.ResponseOutput'="" {{
+                Set tLatestResponseOutput = tLLMResp.ResponseOutput
+            }}
 
             Set toolTurns = 0
             Set maxToolTurns = 3
@@ -533,7 +537,8 @@ class Agent:
                             tLLMResp.Tool,
                             tToolResp.Result,
                             ..GetSystemPrompt(),
-                            ..BuildToolManifest()
+                            ..BuildToolManifest(),
+                            tLatestResponseOutput
                         )
                     )
 
@@ -595,6 +600,10 @@ class Agent:
                     Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
                     Set tReasoningSep = $C(10,10)
                 }}
+
+                If tLLMResp.ResponseOutput'="" {{
+                    Set tLatestResponseOutput = tLLMResp.ResponseOutput
+                }}
             }}
 
             If chainExceeded=1 {{
@@ -634,6 +643,7 @@ class Agent:
                         "assistant",
                         tFinalJSON,
                         tReasoningTrace,
+                        tLatestResponseOutput,
                         .tAssistantMessageId
                     )
                     $$$LOGSTATUS(sc)

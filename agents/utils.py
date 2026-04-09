@@ -60,7 +60,8 @@ def ensure_chat_table():
                 id VARCHAR(200) NOT NULL,
                 message_role VARCHAR(50) NOT NULL,
                 message VARCHAR(50000) NOT NULL,
-                reasoning_trace VARCHAR(50000)
+                reasoning_trace VARCHAR(50000),
+                response_output VARCHAR(50000)
             )
         """)
         conn.commit()
@@ -120,11 +121,35 @@ def ensure_common_utils():
     cls_text = r'''Class Agents.Utils.Common Extends %RegisteredObject
     {
 
+        ClassMethod GetLatestResponseOutput(chatId As %String) As %String
+        {
+            Set itemJson = ""
+            If $Get(chatId)="" Quit ""
+
+            &sql(
+                SELECT TOP 1 response_output
+                INTO :itemJson
+                FROM SQLUser.Chat
+                WHERE id = :chatId
+                AND message_role = 'assistant'
+                AND response_output IS NOT NULL
+                AND response_output <> ''
+                ORDER BY message_id DESC
+            )
+
+            If SQLCODE'=0 {
+                Quit ""
+            }
+
+            Quit $Get(itemJson)
+        }
+
         ClassMethod AppendChatReturnMessageId(
             chatId As %String,
             messageRole As %String,
             msg As %String,
             reasoningTrace As %String = "",
+            responseOutput As %String = "",
             Output pMessageId As %BigInt
         ) As %Status
         {
@@ -132,9 +157,9 @@ def ensure_common_utils():
             If $Get(chatId)="" Quit $$$OK
 
             &sql(INSERT INTO SQLUser.Chat
-                (id, message_role, message, reasoning_trace)
+                (id, message_role, message, reasoning_trace, response_output)
                 VALUES
-                (:chatId, :messageRole, :msg, :reasoningTrace))
+                (:chatId, :messageRole, :msg, :reasoningTrace, :responseOutput))
 
             If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
 
@@ -471,65 +496,56 @@ def ensure_production_utils():
     cls_text = f'''Class Agents.Utils.Production Extends %RegisteredObject
     {{
     
-        ClassMethod ExtractReasoningTrace(respJson As %String) As %String
+        ClassMethod ExtractOutputItems(respJson As %String) As %String
         {{
-            Set trace = ""
-            Set sep = ""
-            Set found = 0
+            Set outJson = ""
 
             Try {{
                 Set obj = ##class(%DynamicObject).%FromJSON(respJson)
 
-                //
-                // 1) Top-level response.reasoning.summary
-                //    Docs show response.reasoning exists and summary may be null.
-                //
+                If obj.%IsDefined("output") {{
+                    Set out = obj.%Get("output")
+                    If $IsObject(out) {{
+                        Set outJson = out.%ToJSON()
+                    }}
+                }}
+            }}Catch ex {{
+                Set outJson = ""
+            }}
+
+            Quit outJson
+        }}
+    
+        ClassMethod ExtractReasoningTrace(respJson As %String) As %String
+        {{
+            Set trace = ""
+            Set sep = ""
+
+            Try {{
+                Set obj = ##class(%DynamicObject).%FromJSON(respJson)
+
                 If obj.%IsDefined("reasoning") {{
                     Set topReasoning = obj.%Get("reasoning")
                     If $IsObject(topReasoning) {{
                         If topReasoning.%IsDefined("summary") {{
                             Set topSummary = topReasoning.%Get("summary")
-
                             If $IsObject(topSummary) {{
-                                // Expected array of summary_text objects
-                                Try {{
-                                    For i=0:1:topSummary.%Size()-1 {{
-                                        Set part = topSummary.%Get(i)
-                                        If '$IsObject(part) Continue
-
-                                        If part.%IsDefined("text") {{
-                                            Set text = part.%Get("text")
-                                            If text'="" {{
-                                                Set trace = trace _ sep _ text
-                                                Set sep = $C(10)
-                                                Set found = 1
-                                            }}
+                                For i=0:1:topSummary.%Size()-1 {{
+                                    Set part = topSummary.%Get(i)
+                                    If '$IsObject(part) Continue
+                                    If part.%IsDefined("text") {{
+                                        Set text = part.%Get("text")
+                                        If text'="" {{
+                                            Set trace = trace _ sep _ text
+                                            Set sep = $C(10)
                                         }}
                                     }}
-                                }} Catch ex {{
-                                    // ignore malformed summary container
-                                }}
-                            }} Else {{
-                                // Defensive fallback in case summary comes back scalar-like
-                                Set text = $Get(topSummary)
-                                If text'="", text'="null" {{
-                                    Set trace = trace _ sep _ text
-                                    Set sep = $C(10)
-                                    Set found = 1
                                 }}
                             }}
                         }}
                     }}
                 }}
 
-                //
-                // 2) output[] reasoning items
-                //    Official schema currently documents:
-                //    - type="reasoning"
-                //    - summary[] of summary_text
-                //    - optional content[] of reasoning_text
-                //    - optional encrypted_content
-                //
                 If obj.%IsDefined("output") {{
                     Set out = obj.%Get("output")
 
@@ -539,102 +555,52 @@ def ensure_production_utils():
                             If '$IsObject(item) Continue
                             If item.%Get("type")'="reasoning" Continue
 
-                            //
-                            // 2a) summary[] -> summary_text.text
-                            //
                             If item.%IsDefined("summary") {{
                                 Set summary = item.%Get("summary")
                                 If $IsObject(summary) {{
-                                    Try {{
-                                        For j=0:1:summary.%Size()-1 {{
-                                            Set part = summary.%Get(j)
-                                            If '$IsObject(part) Continue
-
-                                            Set ptype = ""
-                                            If part.%IsDefined("type") {{
-                                                Set ptype = part.%Get("type")
-                                            }}
-
-                                            If (ptype="summary_text") || (ptype="") {{
-                                                If part.%IsDefined("text") {{
-                                                    Set text = part.%Get("text")
-                                                    If text'="" {{
-                                                        Set trace = trace _ sep _ text
-                                                        Set sep = $C(10)
-                                                        Set found = 1
-                                                    }}
-                                                }}
+                                    For j=0:1:summary.%Size()-1 {{
+                                        Set part = summary.%Get(j)
+                                        If '$IsObject(part) Continue
+                                        If part.%IsDefined("text") {{
+                                            Set text = part.%Get("text")
+                                            If text'="" {{
+                                                Set trace = trace _ sep _ text
+                                                Set sep = $C(10)
                                             }}
                                         }}
-                                    }} Catch ex {{
-                                        // ignore malformed summary
                                     }}
                                 }}
                             }}
 
-                            //
-                            // 2b) content[] -> reasoning_text.text
-                            //
                             If item.%IsDefined("content") {{
                                 Set content = item.%Get("content")
                                 If $IsObject(content) {{
-                                    Try {{
-                                        For j=0:1:content.%Size()-1 {{
-                                            Set part = content.%Get(j)
-                                            If '$IsObject(part) Continue
+                                    For j=0:1:content.%Size()-1 {{
+                                        Set part = content.%Get(j)
+                                        If '$IsObject(part) Continue
 
-                                            Set ptype = ""
-                                            If part.%IsDefined("type") {{
-                                                Set ptype = part.%Get("type")
-                                            }}
+                                        Set ptype = ""
+                                        If part.%IsDefined("type") {{
+                                            Set ptype = part.%Get("type")
+                                        }}
 
-                                            If (ptype="reasoning_text") || (ptype="") {{
-                                                If part.%IsDefined("text") {{
-                                                    Set text = part.%Get("text")
-                                                    If text'="" {{
-                                                        Set trace = trace _ sep _ text
-                                                        Set sep = $C(10)
-                                                        Set found = 1
-                                                    }}
+                                        If (ptype="reasoning_text") || (ptype="") {{
+                                            If part.%IsDefined("text") {{
+                                                Set text = part.%Get("text")
+                                                If text'="" {{
+                                                    Set trace = trace _ sep _ text
+                                                    Set sep = $C(10)
                                                 }}
                                             }}
                                         }}
-                                    }} Catch ex {{
-                                        // ignore malformed content
-                                    }}
-                                }}
-                            }}
-
-                            //
-                            // 2c) optional encrypted_content
-                            //     This is not human-readable, but if it exists and you want
-                            //     evidence that reasoning was returned, keep it.
-                            //
-                            If 'found {{
-                                If item.%IsDefined("encrypted_content") {{
-                                    Set enc = item.%Get("encrypted_content")
-                                    If enc'="" {{
-                                        Set trace = trace _ sep _ "[encrypted_reasoning] " _ enc
-                                        Set sep = $C(10)
-                                        Set found = 1
                                     }}
                                 }}
                             }}
                         }}
                     }}
                 }}
-
             }} Catch ex {{
                 Set trace = ""
-                Set found = 0
-            }}
-
-            //
-            // 3) Final fallback requested by you:
-            //    if blank, dump whole response payload into reasoning_trace
-            //
-            If $ZSTRIP(trace,"<>W")="" {{
-                Set trace = respJson
             }}
 
             Quit trace
@@ -647,10 +613,27 @@ def ensure_production_utils():
             tool As %String = "",
             toolResult As %String = "",
             systemPrompt As %String = "",
-            toolManifest As %String = ""
+            toolManifest As %String = "",
+            responseOutput As %String = ""
         ) As %String
         {{
             Set arr = ##class(%DynamicArray).%New()
+
+            Set priorOutputJson = $Get(responseOutput)
+            If priorOutputJson="", $Get(chatId)'="" {{
+                Set priorOutputJson = ##class(Agents.Utils.Common).GetLatestResponseOutput(chatId)
+            }}
+
+            If priorOutputJson'="" {{
+                Try {{
+                    Set priorOutput = ##class(%DynamicArray).%FromJSON(priorOutputJson)
+                    For i=0:1:priorOutput.%Size()-1 {{
+                        Do arr.%Push(priorOutput.%Get(i))
+                    }}
+                }} Catch ex {{
+                    // ignore bad stored output
+                }}
+            }}
 
             If $Get(systemPrompt)'="" {{
                 Set s1 = ##class(%DynamicObject).%New()
@@ -706,6 +689,22 @@ def ensure_production_utils():
         ) As %String
         {{
             Set arr = ##class(%DynamicArray).%New()
+
+            Set priorOutputJson = ""
+            If $Get(chatId)'="" {{
+                Set priorOutputJson = ##class(Agents.Utils.Common).GetLatestResponseOutput(chatId)
+            }}
+
+            If priorOutputJson'="" {{
+                Try {{
+                    Set priorOutput = ##class(%DynamicArray).%FromJSON(priorOutputJson)
+                    For i=0:1:priorOutput.%Size()-1 {{
+                        Do arr.%Push(priorOutput.%Get(i))
+                    }}
+                }} Catch ex {{
+                    // ignore bad stored output
+                }}
+            }}
 
             If $Get(systemPrompt)'="" {{
                 Set s1 = ##class(%DynamicObject).%New()

@@ -30,7 +30,8 @@ class Chat:
                     id VARCHAR(200) NOT NULL,
                     message_role VARCHAR(50) NOT NULL,
                     message VARCHAR(50000) NOT NULL,
-                    reasoning_trace VARCHAR(50000)
+                    reasoning_trace VARCHAR(50000),
+                    response_output VARCHAR(50000)
                 )
             """)
             conn.commit()
@@ -106,13 +107,19 @@ class Chat:
 
         return json.dumps(result)
 
-    def append(self, role: str, content: str) -> None:
+    def append(
+        self,
+        role: str,
+        content: str,
+        reasoning_trace: str = "",
+        encrypted_reasoning: str = "",
+    ) -> None:
         conn = get_connection()
         cur = conn.cursor()
 
         cur.execute(
-            "INSERT INTO Chat (id, message_role, message) VALUES (?, ?, ?)",
-            (self.id, role, content)
+            "INSERT INTO Chat (id, message_role, message, reasoning_trace, encrypted_reasoning) VALUES (?, ?, ?, ?, ?)",
+            (self.id, role, content, reasoning_trace, encrypted_reasoning)
         )
         conn.commit()
 

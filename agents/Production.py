@@ -294,6 +294,10 @@ class Production:
             Do reasoning.%Set("summary", "detailed")
             Do body.%Set("reasoning", reasoning)
 
+            Set include = ##class(%DynamicArray).%New()
+            Do include.%Push("reasoning.encrypted_content")
+            Do body.%Set("include", include)
+
             Set fmt = ##class(%DynamicObject).%New()
             Do fmt.%Set("type", "json_schema")
             Do fmt.%Set("name", "LLMOutput")
@@ -373,6 +377,7 @@ class Production:
             Set usageJSON = ""
             Set durationMs = ""
             Set reasoningTrace = ""
+            Set responseOutput = ""
 
             Set apiKey = ##class(Ens.Config.Credentials).GetValue("OPENAI_API_KEY", "Password")
             Set apiKey = $ZSTRIP($Get(apiKey), "<>W")
@@ -430,6 +435,7 @@ class Production:
                 }}
             }}
             Set reasoningTrace = ##class(Agents.Utils.Production).ExtractReasoningTrace(raw)
+            Set responseOutput = ##class(Agents.Utils.Production).ExtractOutputItems(raw)
             Set outText = ##class(Agents.Utils.Production).ExtractOutputText(raw)
             If outText="" {{
                 Set sc = $$$ERROR($$$GeneralError, "No output_text returned by model. Raw="_raw)
@@ -446,6 +452,7 @@ class Production:
                 Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
                 Set pResponse.Usage = usageJSON
                 Set pResponse.ReasoningTrace = reasoningTrace
+                Set pResponse.ResponseOutput = responseOutput
             }}Catch ex {{
                 Set sc = $$$ERROR($$$GeneralError, "Model returned invalid wrapper JSON: "_outText)
                 Set hasError = 1

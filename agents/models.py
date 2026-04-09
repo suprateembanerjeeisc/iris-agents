@@ -24,6 +24,7 @@ class LLMResponse(BaseModel):
     content: str
     usage: str
     reasoning_trace: str = ""
+    response_output: str = ""
 
 class ToolRequest(BaseModel):
     id: str
