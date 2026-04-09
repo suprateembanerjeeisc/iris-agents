@@ -110,6 +110,7 @@ class Production:
                     agent_name VARCHAR(200),
                     production_name VARCHAR(200),
                     model VARCHAR(200),
+                    reasoning_effort VARCHAR(50),
                     input_tokens BIGINT,
                     output_tokens BIGINT,
                     total_tokens BIGINT,
@@ -178,6 +179,7 @@ class Production:
         self,
         agents: list[Agent] | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict:
         conn = get_connection()
         cur = conn.cursor()
@@ -211,6 +213,10 @@ class Production:
             sql += " AND model = ?"
             params.append(model)
 
+        if reasoning_effort is not None:
+            sql += " AND reasoning_effort = ?"
+            params.append(reasoning_effort)
+
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
 
@@ -242,7 +248,7 @@ class Production:
         </MapItem>
         }}
 
-        ClassMethod PostResponses(model As %String, inputJson As %String, apiKey As %String, responseType As %String, Output pDurationMs As %BigInt = "") As %String
+        ClassMethod PostResponses(model As %String, inputJson As %String, apiKey As %String, responseType As %String, reasoningEffort As %String, Output pDurationMs As %BigInt = "") As %String
         {{
             Set contentSchema = ##class(Agents.Utils.Production).BuildContentSchema(responseType)
             Set contentSchemaText = contentSchema.%ToJSON()
@@ -284,7 +290,7 @@ class Production:
             Do body.%Set("input", finalInput)
 
             Set reasoning = ##class(%DynamicObject).%New()
-            Do reasoning.%Set("effort", "medium")
+            Do reasoning.%Set("effort", reasoningEffort)
             Do reasoning.%Set("summary", "detailed")
             Do body.%Set("reasoning", reasoning)
 
@@ -297,7 +303,7 @@ class Production:
             Set text = ##class(%DynamicObject).%New()
             Do text.%Set("format", fmt)
             Do body.%Set("text", text)
-            Do body.%Set("max_output_tokens", 4000)
+            Do body.%Set("max_output_tokens", 8000)
 
             Set json = body.%ToJSON()
             Set json = $Replace(json, """strict"":1", """strict"":true")
@@ -372,7 +378,7 @@ class Production:
             Set apiKey = $ZSTRIP($Get(apiKey), "<>W")
             Set apiKey = $TR(apiKey, $CHAR(13,10), "")
 
-            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, apiKey, pRequest.ResponseType, .durationMs)
+            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, apiKey, pRequest.ResponseType, pRequest.ReasoningEffort, .durationMs)
 
             Try {{
                 Set rawObj = ##class(%DynamicObject).%FromJSON(raw)

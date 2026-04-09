@@ -21,6 +21,7 @@ class Agent:
         model: str | None | object = _UNSET,
         toolkits: list[Toolkit] | None | object = _UNSET,
         response_format: type[BaseModel] | None | object = _UNSET,
+        reasoning_effort: str | None = 'medium',
     ):
         conn = get_connection()
         cur = conn.cursor()
@@ -39,7 +40,8 @@ class Agent:
                     description VARCHAR(4000),
                     system_prompt_id VARCHAR(200),
                     model VARCHAR(200),
-                    response_format VARCHAR(4000)
+                    response_format VARCHAR(4000),
+                    reasoning_effort VARCHAR(50)
                 )"""
             )
             conn.commit()
@@ -57,20 +59,18 @@ class Agent:
         cur.execute("SELECT * FROM Agent WHERE agent_name = ?", (name,))
         row = cur.fetchone()
 
-        fetch_only = all(
-            value is Agent._UNSET
-            for value in (description, system_prompt, model, toolkits, response_format)
-        )
+        fetch_only = all(value is Agent._UNSET for value in (description, system_prompt, model, toolkits, response_format))
 
         if fetch_only:
             if row is None:
                 raise KeyError(f"No Agent found for '{name}'")
 
-            _, description, system_prompt_id, model, response_format = row
+            _, description, system_prompt_id, model, response_format, reasoning_effort = row
             self.name = name
             self.description = description
             self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
             self.model = model
+            self.reasoning_effort = reasoning_effort
             self.response_format = (
                 Message(response_format, None, message_type="Response")
                 if response_format else None
@@ -104,14 +104,15 @@ class Agent:
         if row is None:
             cur.execute(
                 """INSERT INTO Agent
-                   (agent_name, description, system_prompt_id, model, response_format)
-                   VALUES (?, ?, ?, ?, ?)""",
+                (agent_name, description, system_prompt_id, model, response_format, reasoning_effort)
+                VALUES (?, ?, ?, ?, ?, ?)""",
                 (
                     name,
                     description_value,
                     system_prompt_id,
                     model,
                     response_format_name,
+                    reasoning_effort,
                 ),
             )
             conn.commit()
@@ -121,13 +122,15 @@ class Agent:
                     description = ?,
                     system_prompt_id = ?,
                     model = ?,
-                    response_format = ?
-                   WHERE agent_name = ?""",
+                    response_format = ?,
+                    reasoning_effort = ?
+                WHERE agent_name = ?""",
                 (
                     description_value,
                     system_prompt_id,
                     model,
                     response_format_name,
+                    reasoning_effort,
                     name,
                 ),
             )
@@ -141,6 +144,7 @@ class Agent:
         self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
         self.model = model
         self.response_format = response_message
+        self.reasoning_effort = reasoning_effort
         self.toolkits = []
 
         if toolkit_list:
@@ -339,6 +343,10 @@ class Agent:
             If tResponseType="" {{
                 Set tResponseType = "{default_response_cls}"
             }}
+            Set tReasoningEffort = pRequest.ReasoningEffort
+            If tReasoningEffort="" {{
+                Set tReasoningEffort = "medium"
+            }}
 
             Set logMsg = "OnRequest start agent="_..%ConfigName_" chatId="_$Get(tChatId)
             $$$LOGINFO(logMsg)
@@ -374,6 +382,7 @@ class Agent:
                 Set tLLMReq = ##class(Agents.Message.LLMRequest).%New()
                 Set tLLMReq.Model = "{self.model}"
                 Set tLLMReq.ResponseType = tResponseType
+                Set tLLMReq.ReasoningEffort = tReasoningEffort
 
                 If tChatId'="" {{
                     Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
@@ -514,6 +523,7 @@ class Agent:
                     Set tLLMReq = ##class(Agents.Message.LLMRequest).%New()
                     Set tLLMReq.Model = "{self.model}"
                     Set tLLMReq.ResponseType = tResponseType
+                    Set tLLMReq.ReasoningEffort = tReasoningEffort
 
                     Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
                         ##class(Agents.Utils.Production).BuildNextLLMChatJSON(
@@ -649,6 +659,7 @@ class Agent:
                         "{self.name}",
                         ##class(Agents.Utils.Common).GetRunningProductionName(),
                         "{self.model}",
+                        tReasoningEffort,
                         oneUsage
                     )
                     $$$LOGSTATUS(sc)
@@ -742,6 +753,7 @@ class Agent:
         message: str | None = None,
         chat: Chat | str | None = None,
         response_format: BaseModel | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         
         if not self.exists():
@@ -801,6 +813,7 @@ class Agent:
                 if effective_response_format
                 else "Agents.Message.Response"
             ),
+            "reasoningEffort": reasoning_effort or self.reasoning_effort,
         }
 
         request_object = irispy.classMethodObject("Agents.Message.Request", "%New")

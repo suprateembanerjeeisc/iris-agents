@@ -15,6 +15,7 @@ class LLMRequest(BaseModel):
     model: str
     responseType: str
     chat: str
+    reasoningEffort: str
 
 class LLMResponse(BaseModel):
     is_tool: bool
@@ -40,6 +41,7 @@ class Request(BaseModel):
     chatId: str = "default"
     message: str
     responseType: str = "Agents.Message.Response"
+    reasoningEffort: str = "medium"
 
 class Response(BaseModel):
     chatId: str = ""

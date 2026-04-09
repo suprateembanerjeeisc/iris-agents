@@ -188,6 +188,7 @@ def ensure_common_utils():
             pAgentName As %String,
             pProductionName As %String,
             pModel As %String,
+            pReasoningEffort As %String,
             pUsageJSON As %String
         ) As %Status
         {
@@ -254,12 +255,12 @@ def ensure_common_utils():
             }
 
             &sql(INSERT INTO SQLUser.Usage
-            (usage_ts, chat_id, message_id, agent_name, production_name, model,
+            (usage_ts, chat_id, message_id, agent_name, production_name, model, reasoning_effort,
             input_tokens, output_tokens, total_tokens,
             input_cached_tokens, input_audio_tokens, output_audio_tokens,
             output_reasoning_tokens, duration_ms)
             VALUES
-            (:ts, :pChatId, :pMessageId, :pAgentName, :pProductionName, :pModel,
+            (:ts, :pChatId, :pMessageId, :pAgentName, :pProductionName, :pModel, :pReasoningEffort,
             :inputTokens, :outputTokens, :totalTokens,
             :inputCachedTokens, :inputAudioTokens, :outputAudioTokens,
             :outputReasoningTokens, :durationMs))
