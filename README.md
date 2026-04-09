@@ -163,7 +163,7 @@ molly(message='What are some places I would like? I tend to like Italian and Asi
 ```
 Agents can also be instantiated in `debug` mode where it logs status and info which can be viewed in Message Viewer
 ```python
-molly(message='Recommend some good food spots for lunch', debug=True)                # Stateless
+molly(message='Recommend some good food spots for lunch', debug=True)
 ```
 ### Production
 Agents must be added to a Production before they can be queried. The Production API stops any running production in the Agents Namespace and starts the specified Production. Agents are implemented as Business Processes, while LLM and Toolkits are implemented as Business Operations. The Production adds all Toolkits among all added agents, even if all Agents may not have access to all Toolkits. 
