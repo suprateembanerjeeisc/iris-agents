@@ -762,7 +762,13 @@ class Agent:
         conn = get_connection()
         cur = conn.cursor()
 
-        existing_ids = {toolkit.name for toolkit in self.toolkits}
+        cur.execute(
+            "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
+            (self.name,),
+        )
+        db_existing_ids = {toolkit_id for (toolkit_id,) in cur.fetchall()}
+
+        existing_ids = db_existing_ids | {toolkit.name for toolkit in self.toolkits}
 
         for toolkit in toolkits:
             toolkit_id = toolkit.name
@@ -770,6 +776,8 @@ class Agent:
             Toolkit(toolkit_id, getattr(toolkit, "url", None))
 
             if toolkit_id in existing_ids:
+                if all(existing_toolkit.name != toolkit_id for existing_toolkit in self.toolkits):
+                    self.toolkits.append(toolkit)
                 continue
 
             cur.execute(

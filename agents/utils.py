@@ -1001,11 +1001,17 @@ def ensure_production_utils():
                     Set content = item.%Get("content")
                     If content="" Continue
 
+                    Set messageText = ""
+
                     For j=0:1:content.%Size()-1 {{
                         Set part = content.%Get(j)
                         If part.%Get("type")="output_text" {{
-                            Set outText = outText _ part.%Get("text")
+                            Set messageText = messageText _ part.%Get("text")
                         }}
+                    }}
+
+                    If messageText'="" {{
+                        Set outText = messageText
                     }}
                 }}
             }} Catch ex {{
