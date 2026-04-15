@@ -16,6 +16,7 @@ class LLMRequest(BaseModel):
     responseType: str
     chat: str
     reasoningEffort: str
+    reasoningDetailed: str = ""
 
 class LLMResponse(BaseModel):
     is_tool: bool
@@ -23,8 +24,9 @@ class LLMResponse(BaseModel):
     tool: str
     content: str
     usage: str
-    reasoning_trace: str = ""
+    reasoning_summary: str = ""
     response_output: str = ""
+    reasoning_detailed: str = ""
 
 class ToolRequest(BaseModel):
     id: str

@@ -248,12 +248,20 @@ class Production:
         </MapItem>
         }}
 
-        ClassMethod PostResponses(model As %String, inputJson As %String, apiKey As %String, responseType As %String, reasoningEffort As %String, Output pDurationMs As %BigInt = "") As %String
+        ClassMethod PostResponses(model As %String, inputJson As %String, reasoningDetailedJson As %String, apiKey As %String, responseType As %String, reasoningEffort As %String, Output pDurationMs As %BigInt = "") As %String
         {{
             Set contentSchema = ##class(Agents.Utils.Production).BuildContentSchema(responseType)
             Set contentSchemaText = contentSchema.%ToJSON()
 
-            Set originalInput = ##class(%DynamicArray).%FromJSON(inputJson)
+            Set mergedInputJson = ##class(Agents.Utils.Production).MergeOutputWithReasoningDetailed(
+                inputJson,
+                reasoningDetailedJson
+            )
+            If mergedInputJson="" {{
+                Set mergedInputJson = inputJson
+            }}
+
+            Set originalInput = ##class(%DynamicArray).%FromJSON(mergedInputJson)
             Set finalInput = ##class(%DynamicArray).%New()
 
             Set sys = ##class(%DynamicObject).%New()
@@ -376,14 +384,15 @@ class Production:
             Set hasError = 0
             Set usageJSON = ""
             Set durationMs = ""
-            Set reasoningTrace = ""
+            Set reasoningSummary = ""
             Set responseOutput = ""
+            Set reasoningDetailed = ""
 
             Set apiKey = ##class(Ens.Config.Credentials).GetValue("OPENAI_API_KEY", "Password")
             Set apiKey = $ZSTRIP($Get(apiKey), "<>W")
             Set apiKey = $TR(apiKey, $CHAR(13,10), "")
 
-            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, apiKey, pRequest.ResponseType, pRequest.ReasoningEffort, .durationMs)
+            Set raw = ..PostResponses(pRequest.Model, pRequest.Chat, pRequest.ReasoningDetailed, apiKey, pRequest.ResponseType, pRequest.ReasoningEffort, .durationMs)
 
             Try {{
                 Set rawObj = ##class(%DynamicObject).%FromJSON(raw)
@@ -434,8 +443,9 @@ class Production:
                     Set usageJSON = ""
                 }}
             }}
-            Set reasoningTrace = ##class(Agents.Utils.Production).ExtractReasoningTrace(raw)
+            Set reasoningSummary = ##class(Agents.Utils.Production).ExtractReasoningSummary(raw)
             Set responseOutput = ##class(Agents.Utils.Production).ExtractOutputItems(raw)
+            Set reasoningDetailed = ##class(Agents.Utils.Production).ExtractReasoningDetailed(raw)
             Set outText = ##class(Agents.Utils.Production).ExtractOutputText(raw)
             If outText="" {{
                 Set sc = $$$ERROR($$$GeneralError, "No output_text returned by model. Raw="_raw)
@@ -451,8 +461,9 @@ class Production:
                 Set pResponse.Tool = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Tool"))
                 Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
                 Set pResponse.Usage = usageJSON
-                Set pResponse.ReasoningTrace = reasoningTrace
+                Set pResponse.ReasoningSummary = reasoningSummary
                 Set pResponse.ResponseOutput = responseOutput
+                Set pResponse.ReasoningDetailed = reasoningDetailed
             }}Catch ex {{
                 Set sc = $$$ERROR($$$GeneralError, "Model returned invalid wrapper JSON: "_outText)
                 Set hasError = 1

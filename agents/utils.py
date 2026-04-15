@@ -60,8 +60,8 @@ def ensure_chat_table():
                 id VARCHAR(200) NOT NULL,
                 message_role VARCHAR(50) NOT NULL,
                 message VARCHAR(50000) NOT NULL,
-                reasoning_trace VARCHAR(50000),
-                response_output VARCHAR(50000)
+                reasoning_summary VARCHAR(50000),
+                reasoning_detailed VARCHAR(50000)
             )
         """)
         conn.commit()
@@ -71,20 +71,6 @@ def ensure_chat_table():
             conn.commit()
         except Exception:
             pass
-    else:
-        cur.execute("""
-            SELECT COLUMN_NAME
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA='SQLUser'
-              AND TABLE_NAME='Chat'
-              AND COLUMN_NAME='reasoning_trace'
-        """)
-        if not cur.fetchone():
-            cur.execute("""
-                ALTER TABLE SQLUser.Chat
-                ADD reasoning_trace VARCHAR(50000)
-            """)
-            conn.commit()
     
 
 def get_connection(obj=False, namespace='Agents'):
@@ -121,19 +107,21 @@ def ensure_common_utils():
     cls_text = r'''Class Agents.Utils.Common Extends %RegisteredObject
     {
 
-        ClassMethod GetLatestResponseOutput(chatId As %String) As %String
+        ClassMethod GetLatestReasoningDetailed(chatId As %String) As %String
         {
-            Set itemJson = ""
-            If $Get(chatId)="" Quit ""
+            Set reasoningDetailed = ""
+            If $Get(chatId)="" {
+                Quit ""
+            }
 
             &sql(
-                SELECT TOP 1 response_output
-                INTO :itemJson
+                SELECT TOP 1 reasoning_detailed
+                INTO :reasoningDetailed
                 FROM SQLUser.Chat
                 WHERE id = :chatId
                 AND message_role = 'assistant'
-                AND response_output IS NOT NULL
-                AND response_output <> ''
+                AND reasoning_detailed IS NOT NULL
+                AND reasoning_detailed <> ''
                 ORDER BY message_id DESC
             )
 
@@ -141,15 +129,15 @@ def ensure_common_utils():
                 Quit ""
             }
 
-            Quit $Get(itemJson)
+            Quit $Get(reasoningDetailed)
         }
 
         ClassMethod AppendChatReturnMessageId(
             chatId As %String,
             messageRole As %String,
             msg As %String,
-            reasoningTrace As %String = "",
-            responseOutput As %String = "",
+            reasoningSummary As %String = "",
+            reasoningDetailed As %String = "",
             Output pMessageId As %BigInt
         ) As %Status
         {
@@ -157,9 +145,9 @@ def ensure_common_utils():
             If $Get(chatId)="" Quit $$$OK
 
             &sql(INSERT INTO SQLUser.Chat
-                (id, message_role, message, reasoning_trace, response_output)
+                (id, message_role, message, reasoning_summary, reasoning_detailed)
                 VALUES
-                (:chatId, :messageRole, :msg, :reasoningTrace, :responseOutput))
+                (:chatId, :messageRole, :msg, :reasoningSummary, :reasoningDetailed))
 
             If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
 
@@ -499,6 +487,7 @@ def ensure_production_utils():
         ClassMethod ExtractOutputItems(respJson As %String) As %String
         {{
             Set outJson = ""
+            Set outItems = ##class(%DynamicArray).%New()
 
             Try {{
                 Set obj = ##class(%DynamicObject).%FromJSON(respJson)
@@ -506,17 +495,131 @@ def ensure_production_utils():
                 If obj.%IsDefined("output") {{
                     Set out = obj.%Get("output")
                     If $IsObject(out) {{
-                        Set outJson = out.%ToJSON()
+                        For i=0:1:out.%Size()-1 {{
+                            Set item = out.%Get(i)
+
+                            If '$IsObject(item) {{
+                                Do outItems.%Push(item)
+                                Continue
+                            }}
+
+                            Set itemJSON = item.%ToJSON()
+                            Set itemCopy = ##class(%DynamicObject).%FromJSON(itemJSON)
+
+                            Set itemType = ""
+                            If itemCopy.%IsDefined("type") {{
+                                Set itemType = itemCopy.%Get("type")
+                            }}
+
+                            If (itemType="reasoning") && itemCopy.%IsDefined("encrypted_content") {{
+                                Do itemCopy.%Remove("encrypted_content")
+                            }}
+
+                            Do outItems.%Push(itemCopy)
+                        }}
                     }}
                 }}
-            }}Catch ex {{
+                Set outJson = outItems.%ToJSON()
+            }} Catch ex {{
+                Set outJson = ""
+            }}
+
+            Quit outJson
+        }}
+
+        ClassMethod ExtractReasoningDetailed(respJson As %String) As %String
+        {{
+            Set outJson = ""
+            Set outItems = ##class(%DynamicArray).%New()
+
+            Try {{
+                Set obj = ##class(%DynamicObject).%FromJSON(respJson)
+
+                If obj.%IsDefined("output") {{
+                    Set out = obj.%Get("output")
+                    If $IsObject(out) {{
+                        For i=0:1:out.%Size()-1 {{
+                            Set item = out.%Get(i)
+                            If '$IsObject(item) Continue
+                            If item.%Get("type")'="reasoning" Continue
+                            If 'item.%IsDefined("encrypted_content") Continue
+
+                            Set itemJSON = item.%ToJSON()
+                            Set itemCopy = ##class(%DynamicObject).%FromJSON(itemJSON)
+                            Do outItems.%Push(itemCopy)
+                        }}
+                    }}
+                }}
+
+                Set outJson = outItems.%ToJSON()
+            }} Catch ex {{
+                Set outJson = ""
+            }}
+
+            Quit outJson
+        }}
+
+        ClassMethod StripReasoningItems(outputJson As %String) As %String
+        {{
+            Set outJson = ""
+            Set stripped = ##class(%DynamicArray).%New()
+
+            Try {{
+                If $Get(outputJson)'="" {{
+                    Set out = ##class(%DynamicArray).%FromJSON(outputJson)
+                    For i=0:1:out.%Size()-1 {{
+                        Set item = out.%Get(i)
+                        If '$IsObject(item) {{
+                            Do stripped.%Push(item)
+                            Continue
+                        }}
+
+                        If item.%Get("type")="reasoning" Continue
+                        Do stripped.%Push(item)
+                    }}
+
+                    Set outJson = stripped.%ToJSON()
+                }}
+            }} Catch ex {{
+                Set outJson = ""
+            }}
+
+            Quit outJson
+        }}
+
+        ClassMethod MergeOutputWithReasoningDetailed(
+            outputJson As %String = "",
+            reasoningDetailedJson As %String = ""
+        ) As %String
+        {{
+            Set outJson = ""
+
+            Try {{
+                Set merged = ##class(%DynamicArray).%New()
+
+                If $Get(reasoningDetailedJson)'="" {{
+                    Set reasoningItems = ##class(%DynamicArray).%FromJSON(reasoningDetailedJson)
+                    For i=0:1:reasoningItems.%Size()-1 {{
+                        Do merged.%Push(reasoningItems.%Get(i))
+                    }}
+                }}
+
+                If $Get(outputJson)'="" {{
+                    Set outputItems = ##class(%DynamicArray).%FromJSON(outputJson)
+                    For i=0:1:outputItems.%Size()-1 {{
+                        Do merged.%Push(outputItems.%Get(i))
+                    }}
+                }}
+
+                Set outJson = merged.%ToJSON()
+            }} Catch ex {{
                 Set outJson = ""
             }}
 
             Quit outJson
         }}
     
-        ClassMethod ExtractReasoningTrace(respJson As %String) As %String
+        ClassMethod ExtractReasoningSummary(respJson As %String) As %String
         {{
             Set trace = ""
             Set sep = ""
@@ -620,9 +723,7 @@ def ensure_production_utils():
             Set arr = ##class(%DynamicArray).%New()
 
             Set priorOutputJson = $Get(responseOutput)
-            If priorOutputJson="", $Get(chatId)'="" {{
-                Set priorOutputJson = ##class(Agents.Utils.Common).GetLatestResponseOutput(chatId)
-            }}
+            Set priorOutputJson = ..StripReasoningItems(priorOutputJson)
 
             If priorOutputJson'="" {{
                 Try {{
@@ -689,22 +790,6 @@ def ensure_production_utils():
         ) As %String
         {{
             Set arr = ##class(%DynamicArray).%New()
-
-            Set priorOutputJson = ""
-            If $Get(chatId)'="" {{
-                Set priorOutputJson = ##class(Agents.Utils.Common).GetLatestResponseOutput(chatId)
-            }}
-
-            If priorOutputJson'="" {{
-                Try {{
-                    Set priorOutput = ##class(%DynamicArray).%FromJSON(priorOutputJson)
-                    For i=0:1:priorOutput.%Size()-1 {{
-                        Do arr.%Push(priorOutput.%Get(i))
-                    }}
-                }} Catch ex {{
-                    // ignore bad stored output
-                }}
-            }}
 
             If $Get(systemPrompt)'="" {{
                 Set s1 = ##class(%DynamicObject).%New()

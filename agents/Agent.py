@@ -22,6 +22,7 @@ class Agent:
         toolkits: list[Toolkit] | None | object = _UNSET,
         response_format: type[BaseModel] | None | object = _UNSET,
         reasoning_effort: str | None = 'medium',
+        persist_reasoning: bool = True,
         debug:bool = False
     ):
         self.debug = debug
@@ -43,7 +44,8 @@ class Agent:
                     system_prompt_id VARCHAR(200),
                     model VARCHAR(200),
                     response_format VARCHAR(4000),
-                    reasoning_effort VARCHAR(50)
+                    reasoning_effort VARCHAR(50),
+                    persist_reasoning INTEGER
                 )"""
             )
             conn.commit()
@@ -58,7 +60,21 @@ class Agent:
             )
             conn.commit()
 
-        cur.execute("SELECT * FROM Agent WHERE agent_name = ?", (name,))
+        cur.execute(
+            """
+            SELECT
+                agent_name,
+                description,
+                system_prompt_id,
+                model,
+                response_format,
+                reasoning_effort,
+                persist_reasoning
+            FROM Agent
+            WHERE agent_name = ?
+            """,
+            (name,),
+        )
         row = cur.fetchone()
 
         fetch_only = all(value is Agent._UNSET for value in (description, system_prompt, model, toolkits, response_format))
@@ -67,12 +83,13 @@ class Agent:
             if row is None:
                 raise KeyError(f"No Agent found for '{name}'")
 
-            _, description, system_prompt_id, model, response_format, reasoning_effort = row
+            _, description, system_prompt_id, model, response_format, reasoning_effort, persist_reasoning = row
             self.name = name
             self.description = description
             self.system_prompt = Prompt(system_prompt_id) if system_prompt_id else None
             self.model = model
             self.reasoning_effort = reasoning_effort
+            self.persist_reasoning = bool(1 if persist_reasoning is None else persist_reasoning)
             self.response_format = (
                 Message(response_format, None, message_type="Response")
                 if response_format else None
@@ -106,8 +123,8 @@ class Agent:
         if row is None:
             cur.execute(
                 """INSERT INTO Agent
-                (agent_name, description, system_prompt_id, model, response_format, reasoning_effort)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (agent_name, description, system_prompt_id, model, response_format, reasoning_effort, persist_reasoning)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     name,
                     description_value,
@@ -115,6 +132,7 @@ class Agent:
                     model,
                     response_format_name,
                     reasoning_effort,
+                    int(bool(persist_reasoning)),
                 ),
             )
             conn.commit()
@@ -125,7 +143,8 @@ class Agent:
                     system_prompt_id = ?,
                     model = ?,
                     response_format = ?,
-                    reasoning_effort = ?
+                    reasoning_effort = ?,
+                    persist_reasoning = ?
                 WHERE agent_name = ?""",
                 (
                     description_value,
@@ -133,6 +152,7 @@ class Agent:
                     model,
                     response_format_name,
                     reasoning_effort,
+                    int(bool(persist_reasoning)),
                     name,
                 ),
             )
@@ -147,6 +167,7 @@ class Agent:
         self.model = model
         self.response_format = response_message
         self.reasoning_effort = reasoning_effort
+        self.persist_reasoning = bool(persist_reasoning)
         self.toolkits = []
 
         if toolkit_list:
@@ -211,6 +232,7 @@ class Agent:
 
         system_prompt_text = self.system_prompt.text if self.system_prompt else ""
         system_prompt_json = json.dumps(system_prompt_text or "")
+        persist_reasoning_int = 1 if self.persist_reasoning else 0
 
         toolkit_manifest_blocks = ""
 
@@ -351,9 +373,11 @@ class Agent:
             Set maxToolTurns = 3
             Set tUsageList = ##class(%DynamicArray).%New()
             Set tAssistantMessageId = ""
-            Set tReasoningTrace = ""
-            Set tReasoningSep = ""
+            Set tReasoningSummary = ""
+            Set tReasoningSummarySep = ""
             Set tLatestResponseOutput = ""
+            Set tLatestReasoningDetailed = ""
+            Set tPersistReasoning = {persist_reasoning_int}
 
             Set tChatId = pRequest.ChatId
             Set tUserMessage = pRequest.Message
@@ -399,8 +423,10 @@ class Agent:
                 Set tLLMReq.Model = "{self.model}"
                 Set tLLMReq.ResponseType = tResponseType
                 Set tLLMReq.ReasoningEffort = tReasoningEffort
+                Set tLLMReq.ReasoningDetailed = ""
 
                 If tChatId'="" {{
+                    Set tLLMReq.ReasoningDetailed = ##class(Agents.Utils.Common).GetLatestReasoningDetailed(tChatId)
                     Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
                         ##class(Agents.Utils.Production).BuildChatJSON(
                             tChatId,
@@ -466,12 +492,15 @@ class Agent:
                 Quit $$$ERROR($$$GeneralError,"LLM returned no object")
             }}
 
-            If tLLMResp.ReasoningTrace'="" {{
-                Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
-                Set tReasoningSep = $C(10,10)
+            If tLLMResp.ReasoningSummary'="" {{
+                Set tReasoningSummary = tReasoningSummary _ tReasoningSummarySep _ tLLMResp.ReasoningSummary
+                Set tReasoningSummarySep = $C(10,10)
             }}
             If tLLMResp.ResponseOutput'="" {{
                 Set tLatestResponseOutput = tLLMResp.ResponseOutput
+            }}
+            If tLLMResp.ReasoningDetailed'="" {{
+                Set tLatestReasoningDetailed = tLLMResp.ReasoningDetailed
             }}
 
             Set toolTurns = 0
@@ -538,6 +567,7 @@ class Agent:
                     Set tLLMReq.Model = "{self.model}"
                     Set tLLMReq.ResponseType = tResponseType
                     Set tLLMReq.ReasoningEffort = tReasoningEffort
+                    Set tLLMReq.ReasoningDetailed = tLatestReasoningDetailed
 
                     Set tLLMReq.Chat = ##class(Agents.Utils.Common).ToJSONString(
                         ##class(Agents.Utils.Production).BuildNextLLMChatJSON(
@@ -605,13 +635,16 @@ class Agent:
                     Quit
                 }}
 
-                If tLLMResp.ReasoningTrace'="" {{
-                    Set tReasoningTrace = tReasoningTrace _ tReasoningSep _ tLLMResp.ReasoningTrace
-                    Set tReasoningSep = $C(10,10)
+                If tLLMResp.ReasoningSummary'="" {{
+                    Set tReasoningSummary = tReasoningSummary _ tReasoningSummarySep _ tLLMResp.ReasoningSummary
+                    Set tReasoningSummarySep = $C(10,10)
                 }}
 
                 If tLLMResp.ResponseOutput'="" {{
                     Set tLatestResponseOutput = tLLMResp.ResponseOutput
+                }}
+                If tLLMResp.ReasoningDetailed'="" {{
+                    Set tLatestReasoningDetailed = tLLMResp.ReasoningDetailed
                 }}
             }}
 
@@ -646,12 +679,20 @@ class Agent:
             If tChatId'="" {{
                 Set stageSC = $$$OK
                 Try {{
+                    Set tStoredReasoningSummary = ""
+                    Set tStoredReasoningDetailed = ""
+
+                    If tPersistReasoning=1 {{
+                        Set tStoredReasoningSummary = tReasoningSummary
+                        Set tStoredReasoningDetailed = tLatestReasoningDetailed
+                    }}
+
                     Set sc = ##class(Agents.Utils.Common).AppendChatReturnMessageId(
                         tChatId,
                         "assistant",
                         tFinalJSON,
-                        tReasoningTrace,
-                        tLatestResponseOutput,
+                        tStoredReasoningSummary,
+                        tStoredReasoningDetailed,
                         .tAssistantMessageId
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
