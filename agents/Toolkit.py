@@ -1,4 +1,4 @@
-from .utils import get_connection, create_class, ensure_common_utils
+from .utils import get_connection, create_class, ensure_common_utils, ensure_schema
 from .models import ToolRequest, ToolResponse
 from .Message import Message
 import iris
@@ -10,26 +10,11 @@ class Toolkit:
 
     def __init__(self, name: str, url: str | None = None):
         self.name = name
+        ensure_schema("Toolkit")
+        should_rebuild_runtime = False
 
         conn = get_connection()
         cur = conn.cursor()
-
-        # Ensure table exists
-        cur.execute("""
-        SELECT TABLE_NAME 
-        FROM INFORMATION_SCHEMA.Tables 
-        WHERE TABLE_SCHEMA = 'SQLUser'
-        """)
-        tables = [r[0] for r in cur.fetchall()]
-
-        if 'Toolkit' not in tables:
-            cur.execute("""
-            CREATE TABLE Toolkit (
-                toolkit_id VARCHAR(200) NOT NULL PRIMARY KEY,
-                toolkit_url VARCHAR(1000) NOT NULL
-            )
-            """)
-            conn.commit()
 
         # Fetch existing
         cur.execute(
@@ -54,6 +39,7 @@ class Toolkit:
                     (url, name)
                 )
                 conn.commit()
+                should_rebuild_runtime = True
             self.url = url
         else:
             cur.execute(
@@ -62,14 +48,17 @@ class Toolkit:
             )
             conn.commit()
             self.url = url
+            should_rebuild_runtime = True
 
-        self.ensure_runtime_classes()
+        self.ensure_runtime_classes(force=should_rebuild_runtime)
 
-    def ensure_runtime_classes(self) -> None:
-        Message('ToolRequest', ToolRequest, message_type='Request')
-        Message('ToolResponse', ToolResponse, message_type='Response')
-
+    def ensure_runtime_classes(self, force: bool = False) -> None:
         irispy = get_connection(True)
+
+        if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', 'Agents.Message.ToolRequest')) != 1:
+            Message('ToolRequest', ToolRequest, message_type='Request')
+        if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', 'Agents.Message.ToolResponse')) != 1:
+            Message('ToolResponse', ToolResponse, message_type='Response')
 
         deps = ['Agents.Message.ToolRequest', 'Agents.Message.ToolResponse']
         deadline = time.time() + 10.0
@@ -90,9 +79,11 @@ class Toolkit:
                 + ", ".join(missing)
             )
 
-        ensure_common_utils()
-
         cls_name = f'Agents.Operation.Toolkit{self.name}'
+        if int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', 'Agents.Utils.Common')) != 1:
+            ensure_common_utils()
+        if not force and int(irispy.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', cls_name)) == 1:
+            return
 
         parsed = urlparse(self.url)
         host = parsed.hostname
@@ -265,13 +256,62 @@ class Toolkit:
             Quit ..PostWithSession("tools/list", params, .pResult)
         }}
 
-        Method InvokeTool(pRequest As Agents.Message.ToolRequest, Output pResponse As Agents.Message.ToolResponse) As %Status
+        ClassMethod CallTool(
+            pTool As %String,
+            pParamsJSON As %String = "",
+            Output pOk As %Integer = 0,
+            Output pResult As %String = ""
+        ) As %Status
         {{
             Set sc = $$$OK
             Set body = ""
-            Set params = ""
-            Set paramsText = ""
+            Set pOk = 0
+            Set pResult = ""
             Set parseOK = 1
+
+            Try {{
+                Set paramsText = $Get(pParamsJSON)
+                If paramsText="" {{
+                    Set paramsText = "{{}}"
+                }}
+
+                Set params = ##class(%DynamicObject).%FromJSON(paramsText)
+                If '$IsObject(params) {{
+                    Set parseOK = 0
+                    Set pResult = "Tool params must be a JSON object."
+                }} ElseIf 'params.%IsA("%Library.DynamicObject") {{
+                    Set parseOK = 0
+                    Set pResult = "Tool params must be a JSON object."
+                }}
+            }} Catch ex {{
+                Set parseOK = 0
+                Set pResult = "Invalid tool params JSON: "_ex.DisplayString()
+            }}
+
+            If parseOK {{
+                Set callParams = ##class(%DynamicObject).%New()
+                Do callParams.%Set("name", pTool)
+                Do callParams.%Set("arguments", params)
+
+                Set sc = ..PostWithSession("tools/call", callParams, .body)
+                If $$$ISERR(sc) {{
+                    Set pResult = $SYSTEM.Status.GetErrorText(sc)
+                    Set sc = $$$OK
+                }} Else {{
+                    Set pOk = 1
+                    Set pResult = ##class(Agents.Utils.Common).ToJSONString(body)
+                }}
+            }}
+
+            Quit sc
+        }}
+
+        Method InvokeTool(pRequest As Agents.Message.ToolRequest, Output pResponse As Agents.Message.ToolResponse) As %Status
+        {{
+            Set sc = $$$OK
+            Set paramsText = ""
+            Set ok = 0
+            Set result = ""
 
             Set pResponse = ##class(Agents.Message.ToolResponse).%New()
             Set pResponse.Id = pRequest.Id
@@ -279,28 +319,10 @@ class Toolkit:
             Set pResponse.Ok = 0
             Set pResponse.Result = ""
 
-            Try {{
-                Set paramsText = ##class(Agents.Utils.Common).ToJSONString(pRequest.Params)
-                Set params = ##class(%DynamicObject).%FromJSON(paramsText)
-            }} Catch ex {{
-                Set parseOK = 0
-                Set pResponse.Result = "Invalid tool params JSON: "_ex.DisplayString()
-            }}
-
-            If parseOK {{
-                Set callParams = ##class(%DynamicObject).%New()
-                Do callParams.%Set("name", pRequest.Name)
-                Do callParams.%Set("arguments", params)
-
-                Set sc = ..PostWithSession("tools/call", callParams, .body)
-                If $$$ISERR(sc) {{
-                    Set pResponse.Result = $SYSTEM.Status.GetErrorText(sc)
-                    Set sc = $$$OK
-                }} Else {{
-                    Set pResponse.Ok = 1
-                    Set pResponse.Result = ##class(Agents.Utils.Common).ToJSONString(body)
-                }}
-            }}
+            Set paramsText = ##class(Agents.Utils.Common).ToJSONString(pRequest.Params)
+            Set sc = ..CallTool(pRequest.Name, paramsText, .ok, .result)
+            Set pResponse.Ok = ok
+            Set pResponse.Result = result
 
             Quit sc
         }}

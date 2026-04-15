@@ -3,7 +3,7 @@ import pandas as pd
 import iris
 from pydantic import BaseModel
 
-from .utils import get_connection, create_class
+from .utils import get_connection, create_class, ensure_schema
 from .Toolkit import Toolkit
 from .Prompt import Prompt
 from .Message import Message
@@ -26,39 +26,9 @@ class Agent:
         debug:bool = False
     ):
         self.debug = debug
+        ensure_schema("Agent", "AgentToolkit")
         conn = get_connection()
         cur = conn.cursor()
-
-        sql = """SELECT TABLE_NAME
-                 FROM INFORMATION_SCHEMA.Tables
-                 WHERE TABLE_TYPE='BASE TABLE'
-                 AND TABLE_SCHEMA='SQLUser'"""
-        cur.execute(sql)
-        tables = [row[0] for row in cur.fetchall()]
-
-        if "Agent" not in tables:
-            cur.execute(
-                """CREATE TABLE Agent (
-                    agent_name VARCHAR(200) NOT NULL PRIMARY KEY,
-                    description VARCHAR(4000),
-                    system_prompt_id VARCHAR(200),
-                    model VARCHAR(200),
-                    response_format VARCHAR(4000),
-                    reasoning_effort VARCHAR(50),
-                    persist_reasoning INTEGER
-                )"""
-            )
-            conn.commit()
-
-        if "AgentToolkit" not in tables:
-            cur.execute(
-                """CREATE TABLE AgentToolkit (
-                    agent_name VARCHAR(200) NOT NULL,
-                    toolkit_id VARCHAR(200) NOT NULL,
-                    PRIMARY KEY (agent_name, toolkit_id)
-                )"""
-            )
-            conn.commit()
 
         cur.execute(
             """
@@ -201,6 +171,7 @@ class Agent:
         create_class(f'Agents.Gateway.{self.name}Service', cls_text)
 
     def usage(self) -> dict:
+        ensure_schema("Usage")
         conn = get_connection()
         cur = conn.cursor()
 
@@ -815,6 +786,157 @@ class Agent:
             if toolkit.name not in toolkit_ids_to_remove
         ]
 
+    def _normalize_chat_id(self, chat: Chat | str | None) -> str:
+        if isinstance(chat, Chat):
+            return chat.id
+        if isinstance(chat, str):
+            return chat
+        if chat is None:
+            return ''
+        raise TypeError("chat must be Chat | str | None")
+
+    def _get_attached_toolkit(self, toolkit: str | Toolkit) -> Toolkit:
+        toolkit_name = toolkit.name if isinstance(toolkit, Toolkit) else str(toolkit)
+        toolkit_name = toolkit_name.strip()
+
+        if not toolkit_name:
+            raise ValueError("toolkit must be a non-empty string")
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?",
+            (self.name, toolkit_name),
+        )
+
+        if cur.fetchone() is None:
+            raise KeyError(f"Toolkit '{toolkit_name}' is not attached to agent '{self.name}'")
+
+        return Toolkit(toolkit_name)
+
+    @staticmethod
+    def _coerce_tool_params(params: dict | str | None) -> str:
+        if params is None:
+            return "{}"
+
+        if isinstance(params, dict):
+            return json.dumps(params, ensure_ascii=False)
+
+        if isinstance(params, str):
+            try:
+                parsed = json.loads(params)
+            except json.JSONDecodeError as exc:
+                raise ValueError("params must be valid JSON text") from exc
+
+            if not isinstance(parsed, dict):
+                raise ValueError("params JSON must decode to an object")
+
+            return json.dumps(parsed, ensure_ascii=False)
+
+        raise TypeError("params must be dict | str | None")
+
+    @staticmethod
+    def _parse_json_if_possible(value: str):
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+
+    @classmethod
+    def _unwrap_tool_payload(cls, value: str):
+        parsed = cls._parse_json_if_possible(value)
+
+        if not isinstance(parsed, dict):
+            return parsed
+
+        result = parsed.get("result")
+        if not isinstance(result, dict):
+            return parsed
+
+        content = result.get("content")
+        if not isinstance(content, list):
+            return result
+
+        items = []
+        for item in content:
+            if not isinstance(item, dict):
+                items.append(item)
+                continue
+
+            item_type = item.get("type")
+
+            if item_type == "text":
+                items.append(cls._parse_json_if_possible(item.get("text", "")))
+                continue
+
+            if item_type == "json":
+                if "json" in item:
+                    items.append(item.get("json"))
+                    continue
+
+            items.append(item)
+
+        if len(items) == 1:
+            return items[0]
+
+        return items
+
+    def use(
+        self,
+        toolkit: str | Toolkit,
+        tool: str,
+        params: dict | str | None = None,
+        chat: Chat | str | None = None,
+    ):
+        if not self.exists():
+            raise KeyError(f"No Agent found for '{self.name}'")
+
+        tool_name = tool.strip() if isinstance(tool, str) else ""
+        if not tool_name:
+            raise ValueError("tool must be a non-empty string")
+
+        chat_id = self._normalize_chat_id(chat)
+        toolkit_obj = self._get_attached_toolkit(toolkit)
+
+        toolkit_obj.ensure_runtime_classes()
+        ensure_schema("ToolUsage")
+
+        request_payload = self._coerce_tool_params(params)
+
+        irispy = get_connection(True)
+        ok_ref = iris.IRISReference(0)
+        result_ref = iris.IRISReference("")
+
+        sc = irispy.classMethodValue(
+            f"Agents.Operation.Toolkit{toolkit_obj.name}",
+            "CallTool",
+            tool_name,
+            request_payload,
+            ok_ref,
+            result_ref,
+        )
+        if sc != 1:
+            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+
+        response_ok = int(ok_ref.getValue() or 0)
+        response_payload = result_ref.getValue() or ""
+
+        sc = irispy.classMethodValue(
+            "Agents.Utils.Common",
+            "LogToolUsage",
+            chat_id,
+            self.name,
+            toolkit_obj.name,
+            tool_name,
+            request_payload,
+            response_ok,
+            response_payload,
+        )
+        if sc != 1:
+            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+
+        return self._unwrap_tool_payload(response_payload)
+
     def __call__(
         self,
         message: str | None = None,
@@ -863,14 +985,7 @@ class Agent:
         if message is None:
             raise ValueError("Provide message=...")
 
-        if isinstance(chat, Chat):
-            chat_id = chat.id
-        elif isinstance(chat, str):
-            chat_id = chat
-        elif chat is None:
-            chat_id = ''
-        else:
-            raise TypeError("chat must be Chat | str | None")
+        chat_id = self._normalize_chat_id(chat)
 
         payload = {
             "message": message,
@@ -1027,6 +1142,7 @@ class Agent:
             raise RuntimeError("Agent cleanup encountered errors:\n" + "\n".join(errors))
         
     def exists(self) -> bool:
+        ensure_schema("Agent")
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("SELECT 1 FROM Agent WHERE agent_name = ?", (self.name,))

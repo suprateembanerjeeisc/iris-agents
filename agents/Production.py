@@ -7,7 +7,7 @@ from .Toolkit import Toolkit
 from .Message import Message
 from .Agent import Agent
 from .models import LLMRequest, LLMResponse, Request, Response, LLMOutput
-from .utils import get_connection, create_class, ensure_common_utils, ensure_production_utils
+from .utils import get_connection, create_class, ensure_common_utils, ensure_production_utils, ensure_schema
 
 load_dotenv()
 
@@ -52,135 +52,13 @@ class Production:
 
             self.build()
 
-    def ensure_tool_usage_table(self):
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.Tables
-            WHERE TABLE_TYPE='BASE TABLE'
-            AND TABLE_SCHEMA='SQLUser'
-            AND TABLE_NAME='ToolUsage'
-        """)
-        row = cur.fetchone()
-
-        if not row:
-            cur.execute("""
-                CREATE TABLE ToolUsage (
-                    usage_id BIGINT IDENTITY PRIMARY KEY,
-                    usage_ts TIMESTAMP NOT NULL,
-                    chat_id VARCHAR(200),
-                    agent_name VARCHAR(200) NOT NULL,
-                    toolkit VARCHAR(200) NOT NULL,
-                    tool_name VARCHAR(200) NOT NULL,
-                    request_payload VARCHAR(50000) NOT NULL,
-                    response_ok INTEGER NOT NULL,
-                    response_payload VARCHAR(50000) NOT NULL
-                )
-            """)
-            conn.commit()
-
-        try:
-            cur.execute("CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)")
-            conn.commit()
-        except Exception:
-            pass
-
-    def ensure_llm_usage_table(self):
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.Tables
-            WHERE TABLE_TYPE='BASE TABLE'
-            AND TABLE_SCHEMA='SQLUser'
-            AND TABLE_NAME='Usage'
-        """)
-        row = cur.fetchone()
-
-        if not row:
-            cur.execute("""
-                CREATE TABLE Usage (
-                    usage_id BIGINT IDENTITY PRIMARY KEY,
-                    usage_ts TIMESTAMP NOT NULL,
-                    chat_id VARCHAR(200),
-                    message_id BIGINT,
-                    agent_name VARCHAR(200),
-                    production_name VARCHAR(200),
-                    model VARCHAR(200),
-                    reasoning_effort VARCHAR(50),
-                    input_tokens BIGINT,
-                    output_tokens BIGINT,
-                    total_tokens BIGINT,
-                    input_cached_tokens BIGINT,
-                    input_audio_tokens BIGINT,
-                    output_audio_tokens BIGINT,
-                    output_reasoning_tokens BIGINT,
-                    duration_ms BIGINT
-                )
-            """)
-            conn.commit()
-        else:
-            cur.execute("""
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA='SQLUser'
-                AND TABLE_NAME='Usage'
-                AND COLUMN_NAME='message_id'
-            """)
-            if not cur.fetchone():
-                cur.execute("""
-                    ALTER TABLE SQLUser.Usage
-                    ADD message_id BIGINT
-                """)
-                conn.commit()
-
-            cur.execute("""
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA='SQLUser'
-                AND TABLE_NAME='Usage'
-                AND COLUMN_NAME='duration_ms'
-            """)
-            if not cur.fetchone():
-                cur.execute("""
-                    ALTER TABLE SQLUser.Usage
-                    ADD duration_ms BIGINT
-                """)
-                conn.commit()
-
-        try:
-            cur.execute("CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)")
-            conn.commit()
-        except Exception:
-            pass
-
-        try:
-            cur.execute("CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)")
-            conn.commit()
-        except Exception:
-            pass
-
-        try:
-            cur.execute("CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)")
-            conn.commit()
-        except Exception:
-            pass
-
-        try:
-            cur.execute("CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)")
-            conn.commit()
-        except Exception:
-            pass
-
     def usage(
         self,
         agents: list[Agent] | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
     ) -> dict:
+        ensure_schema("Usage")
         conn = get_connection()
         cur = conn.cursor()
 
@@ -479,9 +357,8 @@ class Production:
     def build(self):
         ensure_common_utils()
         ensure_production_utils()
+        ensure_schema("ToolUsage", "Usage")
         self.create_models()
-        self.ensure_tool_usage_table()
-        self.ensure_llm_usage_table()
         self.initialize_OpenAI()
 
         prod_xml = f'''<Production Name="{self.name}" LogGeneralTraceEvents="false">

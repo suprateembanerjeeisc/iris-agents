@@ -7,6 +7,110 @@ load_dotenv()
 AGENTS_NAMESPACE = "Agents"
 NAMESPACE_READY = False
 
+SCHEMA_DEFINITIONS = {
+    "Prompt": {
+        "create": """
+            CREATE TABLE Prompt (
+                prompt_id VARCHAR(200) NOT NULL,
+                prompt_text VARCHAR(200) NOT NULL,
+                version INT NOT NULL,
+                PRIMARY KEY (prompt_id, version)
+            )
+        """,
+    },
+    "Agent": {
+        "create": """
+            CREATE TABLE Agent (
+                agent_name VARCHAR(200) NOT NULL PRIMARY KEY,
+                description VARCHAR(4000),
+                system_prompt_id VARCHAR(200),
+                model VARCHAR(200),
+                response_format VARCHAR(4000),
+                reasoning_effort VARCHAR(50),
+                persist_reasoning INTEGER
+            )
+        """,
+    },
+    "AgentToolkit": {
+        "create": """
+            CREATE TABLE AgentToolkit (
+                agent_name VARCHAR(200) NOT NULL,
+                toolkit_id VARCHAR(200) NOT NULL,
+                PRIMARY KEY (agent_name, toolkit_id)
+            )
+        """,
+    },
+    "Toolkit": {
+        "create": """
+            CREATE TABLE Toolkit (
+                toolkit_id VARCHAR(200) NOT NULL PRIMARY KEY,
+                toolkit_url VARCHAR(1000) NOT NULL
+            )
+        """,
+    },
+    "Chat": {
+        "create": """
+            CREATE TABLE Chat (
+                message_id BIGINT IDENTITY PRIMARY KEY,
+                id VARCHAR(200) NOT NULL,
+                message_role VARCHAR(50) NOT NULL,
+                message VARCHAR(50000) NOT NULL,
+                reasoning_summary VARCHAR(50000),
+                reasoning_detailed VARCHAR(50000)
+            )
+        """,
+        "indexes": [
+            "CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)",
+        ],
+    },
+    "ToolUsage": {
+        "create": """
+            CREATE TABLE ToolUsage (
+                usage_id BIGINT IDENTITY PRIMARY KEY,
+                usage_ts TIMESTAMP NOT NULL,
+                chat_id VARCHAR(200),
+                agent_name VARCHAR(200) NOT NULL,
+                toolkit VARCHAR(200) NOT NULL,
+                tool_name VARCHAR(200) NOT NULL,
+                request_payload VARCHAR(50000) NOT NULL,
+                response_ok INTEGER NOT NULL,
+                response_payload VARCHAR(50000) NOT NULL
+            )
+        """,
+        "indexes": [
+            "CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)",
+        ],
+    },
+    "Usage": {
+        "create": """
+            CREATE TABLE Usage (
+                usage_id BIGINT IDENTITY PRIMARY KEY,
+                usage_ts TIMESTAMP NOT NULL,
+                chat_id VARCHAR(200),
+                message_id BIGINT,
+                agent_name VARCHAR(200),
+                production_name VARCHAR(200),
+                model VARCHAR(200),
+                reasoning_effort VARCHAR(50),
+                input_tokens BIGINT,
+                output_tokens BIGINT,
+                total_tokens BIGINT,
+                input_cached_tokens BIGINT,
+                input_audio_tokens BIGINT,
+                output_audio_tokens BIGINT,
+                output_reasoning_tokens BIGINT,
+                duration_ms BIGINT
+            )
+        """,
+        "indexes": [
+            "CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)",
+            "CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)",
+            "CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)",
+            "CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)",
+        ],
+    },
+}
+
 def connect(namespace: str, obj: bool = False):
     conn = iris.connect(
         hostname=os.environ["IRIS_HOSTNAME"],
@@ -39,38 +143,43 @@ def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
             raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
 
     NAMESPACE_READY = True
-    
-def ensure_chat_table():
+
+def ensure_schema(*table_names: str) -> None:
     conn = get_connection()
     cur = conn.cursor()
 
-    sql = """
+    cur.execute(
+        """
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.Tables
         WHERE TABLE_TYPE='BASE TABLE'
         AND TABLE_SCHEMA='SQLUser'
-    """
-    cur.execute(sql)
-    tables = [row[0] for row in cur.fetchall()]
+        """
+    )
+    existing_tables = {row[0] for row in cur.fetchall()}
 
-    if "Chat" not in tables:
-        cur.execute("""
-            CREATE TABLE Chat (
-                message_id BIGINT IDENTITY PRIMARY KEY,
-                id VARCHAR(200) NOT NULL,
-                message_role VARCHAR(50) NOT NULL,
-                message VARCHAR(50000) NOT NULL,
-                reasoning_summary VARCHAR(50000),
-                reasoning_detailed VARCHAR(50000)
-            )
-        """)
-        conn.commit()
+    if not table_names:
+        names = list(SCHEMA_DEFINITIONS.keys())
+    else:
+        names = list(dict.fromkeys(table_names))
 
-        try:
-            cur.execute("CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)")
+    for name in names:
+        if name not in SCHEMA_DEFINITIONS:
+            raise KeyError(f"Unknown schema definition: {name}")
+
+        definition = SCHEMA_DEFINITIONS[name]
+
+        if name not in existing_tables:
+            cur.execute(definition["create"])
             conn.commit()
-        except Exception:
-            pass
+            existing_tables.add(name)
+
+        for index_sql in definition.get("indexes", []):
+            try:
+                cur.execute(index_sql)
+                conn.commit()
+            except Exception:
+                pass
     
 
 def get_connection(obj=False, namespace='Agents'):
@@ -479,7 +588,7 @@ def ensure_common_utils():
 
 def ensure_production_utils():
 
-    ensure_chat_table()
+    ensure_schema("Chat")
     
     cls_text = f'''Class Agents.Utils.Production Extends %RegisteredObject
     {{

@@ -1,6 +1,6 @@
 import json
 import pandas as pd
-from .utils import get_connection
+from .utils import get_connection, ensure_schema
 
 class Chat:
     def __init__(self,
@@ -9,38 +9,10 @@ class Chat:
                  limit: int = 200):
 
         self.id = str(name)
+        ensure_schema("Chat")
 
         conn = get_connection()
         cur = conn.cursor()
-
-        # Ensure table exists
-        sql = """
-            SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.Tables
-            WHERE TABLE_TYPE='BASE TABLE'
-            AND TABLE_SCHEMA='SQLUser'
-        """
-        cur.execute(sql)
-        tables = [row[0] for row in cur.fetchall()]
-
-        if "Chat" not in tables:
-            cur.execute("""
-                CREATE TABLE Chat (
-                    message_id BIGINT IDENTITY PRIMARY KEY,
-                    id VARCHAR(200) NOT NULL,
-                    message_role VARCHAR(50) NOT NULL,
-                    message VARCHAR(50000) NOT NULL,
-                    reasoning_summary VARCHAR(50000),
-                    reasoning_detailed VARCHAR(50000)
-                )
-            """)
-            conn.commit()
-
-            try:
-                cur.execute("CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)")
-                conn.commit()
-            except Exception:
-                pass
 
         # If messages provided: reset + seed
         if messages is not None:
@@ -80,6 +52,7 @@ class Chat:
         self.messages = [{"role": row[0], "content": row[1]} for row in rows]
 
     def usage(self) -> str:
+        ensure_schema("Usage")
         conn = get_connection()
         cur = conn.cursor()
 

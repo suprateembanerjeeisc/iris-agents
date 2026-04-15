@@ -1,36 +1,15 @@
 from dotenv import load_dotenv
 import string
-from .utils import get_connection
+from .utils import get_connection, ensure_schema
 
 load_dotenv()
 
 
 class Prompt:
     def __init__(self, name: str, text: str | None = None, version: int | None = None):
+        ensure_schema("Prompt")
         conn = get_connection()
         cur = conn.cursor()
-
-        def get_tables() -> list[str]:
-            cur.execute(
-                """SELECT TABLE_NAME
-                   FROM INFORMATION_SCHEMA.Tables
-                   WHERE TABLE_TYPE = 'BASE TABLE'
-                     AND TABLE_SCHEMA = 'SQLUser'"""
-            )
-            return [row[0] for row in cur.fetchall()]
-
-        tables = get_tables()
-
-        if "Prompt" not in tables:
-            cur.execute(
-                """CREATE TABLE Prompt (
-                    prompt_id VARCHAR(200) NOT NULL,
-                    prompt_text VARCHAR(200) NOT NULL,
-                    version INT NOT NULL,
-                    PRIMARY KEY (prompt_id, version)
-                )"""
-            )
-            conn.commit()
 
         # Fetch prompt rows
         if version is None:

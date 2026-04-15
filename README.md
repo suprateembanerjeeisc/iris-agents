@@ -161,6 +161,10 @@ molly(message='What are some places I would like? I tend to like Italian and Asi
       reasoning_effort='high',
       chat='travel')
 ```
+Agents can be invoked to explicitly call a tool with compatible parameters.
+```python
+molly.use(toolkit='IRIS', tool='query', params={'namespace':'Agents', 'sql': 'Select * from Agent'})
+```
 Agents can also be instantiated in `debug` mode where it logs status and info which can be viewed in Message Viewer
 ```python
 molly(message='Recommend some good food spots for lunch', debug=True)
