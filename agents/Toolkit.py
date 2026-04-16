@@ -1,4 +1,4 @@
-from .utils import get_connection, create_class, ensure_common_utils, ensure_schema
+from .utils import create_class, ensure_agents_namespace, ensure_common_utils, ensure_schema, get_connection
 from .models import ToolRequest, ToolResponse
 from .Message import Message
 import time
@@ -9,6 +9,9 @@ class Toolkit:
 
     def __init__(self, name: str, url: str | None = None):
         self.name = name
+        if url is not None:
+            ensure_agents_namespace()
+
         ensure_schema('Toolkit')
         should_rebuild_runtime = False
 

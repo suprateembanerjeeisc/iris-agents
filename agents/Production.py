@@ -5,7 +5,7 @@ import os
 from .Message import Message
 from .Agent import Agent
 from .models import LLMRequest, LLMResponse, Request, Response, LLMOutput
-from .utils import get_connection, create_class, ensure_common_utils, ensure_production_utils, ensure_schema
+from .utils import create_class, ensure_agents_namespace, ensure_common_utils, ensure_production_utils, ensure_schema, get_connection
 
 load_dotenv()
 
@@ -17,9 +17,14 @@ class Production:
              openai_api_key: str | None = None):
         self.name = name
         self.openai_api_key = openai_api_key
+        build_mode = agents is not None or openai_api_key is not None
+
+        if build_mode:
+            ensure_agents_namespace()
+
         irispy = get_connection(True)
 
-        if agents is None and openai_api_key is None:
+        if not build_mode:
             if not irispy.classMethodObject('Ens.Config.Production', '%OpenId', f'User.{self.name}'):
                 raise RuntimeError(f'Production class not found: User.{self.name}')
 
@@ -53,8 +58,9 @@ class Production:
     def usage(self,
               agents: list[Agent] | None = None,
               model: str | None = None,
-              reasoning_effort: str | None = None) -> dict:
-        ensure_schema("Usage")
+              reasoning_effort: str | None = None,
+              workflow: str | None = None) -> dict:
+        ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
 
@@ -90,6 +96,14 @@ class Production:
         if reasoning_effort is not None:
             sql += ' AND reasoning_effort = ?'
             params.append(reasoning_effort)
+
+        if workflow is not None:
+            if not isinstance(workflow, str):
+                raise TypeError('workflow must be str | None')
+            workflow_value = workflow.strip()
+            if workflow_value:
+                sql += ' AND workflow = ?'
+                params.append(workflow_value)
 
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
@@ -251,7 +265,6 @@ class Production:
             Set usageJSON = ""
             Set durationMs = ""
             Set reasoningSummary = ""
-            Set responseOutput = ""
             Set reasoningDetailed = ""
 
             Set apiKey = ##class(Ens.Config.Credentials).GetValue("OPENAI_API_KEY", "Password")
@@ -310,7 +323,6 @@ class Production:
                 }}
             }}
             Set reasoningSummary = ##class(Agents.Utils.Production).ExtractReasoningSummary(raw)
-            Set responseOutput = ##class(Agents.Utils.Production).ExtractOutputItems(raw)
             Set reasoningDetailed = ##class(Agents.Utils.Production).ExtractReasoningDetailed(raw)
             Set outText = ##class(Agents.Utils.Production).ExtractOutputText(raw)
             If outText="" {{
@@ -328,7 +340,6 @@ class Production:
                 Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
                 Set pResponse.Usage = usageJSON
                 Set pResponse.ReasoningSummary = reasoningSummary
-                Set pResponse.ResponseOutput = responseOutput
                 Set pResponse.ReasoningDetailed = reasoningDetailed
             }}Catch ex {{
                 Set sc = $$$ERROR($$$GeneralError, "Model returned invalid wrapper JSON: "_outText)

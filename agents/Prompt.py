@@ -1,12 +1,15 @@
 from dotenv import load_dotenv
 import string
-from .utils import get_connection, ensure_schema
+from .utils import ensure_agents_namespace, get_connection, ensure_schema
 
 load_dotenv()
 
 
 class Prompt:
     def __init__(self, name: str, text: str | None = None, version: int | None = None):
+        if text is not None:
+            ensure_agents_namespace()
+
         ensure_schema('Prompt')
         conn = get_connection()
         cur = conn.cursor()

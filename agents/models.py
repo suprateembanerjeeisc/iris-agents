@@ -16,7 +16,7 @@ class LLMRequest(BaseModel):
     responseType: str
     chat: str
     reasoningEffort: str
-    reasoningDetailed: str = ""
+    reasoningDetailed: str = ''
 
 class LLMResponse(BaseModel):
     is_tool: bool
@@ -24,9 +24,8 @@ class LLMResponse(BaseModel):
     tool: str
     content: str
     usage: str
-    reasoning_summary: str = ""
-    response_output: str = ""
-    reasoning_detailed: str = ""
+    reasoning_summary: str = ''
+    reasoning_detailed: str = ''
 
 class ToolRequest(BaseModel):
     id: str
@@ -41,11 +40,12 @@ class ToolResponse(BaseModel):
     result: str
 
 class Request(BaseModel):
-    chatId: str = "default"
+    chatId: str = 'default'
+    workflow: str = ''
     message: str
-    responseType: str = "Agents.Message.Response"
-    reasoningEffort: str = "medium"
+    responseType: str = 'Agents.Message.Response'
+    reasoningEffort: str = 'medium'
 
 class Response(BaseModel):
-    chatId: str = ""
+    chatId: str = ''
     message: str

@@ -2,7 +2,7 @@ import json
 import iris
 from pydantic import BaseModel
 
-from .utils import get_connection, create_class, ensure_schema
+from .utils import create_class, ensure_agents_namespace, ensure_schema, get_connection
 from .Toolkit import Toolkit
 from .Prompt import Prompt
 from .Message import Message
@@ -25,6 +25,11 @@ class Agent:
         debug:bool = False
     ):
         self.debug = debug
+        fetch_only = all(value is Agent._UNSET for value in (description, system_prompt, model, toolkits, response_format))
+
+        if not fetch_only:
+            ensure_agents_namespace()
+
         ensure_schema('Agent', 'AgentToolkit')
         conn = get_connection()
         cur = conn.cursor()
@@ -45,8 +50,6 @@ class Agent:
             (name,),
         )
         row = cur.fetchone()
-
-        fetch_only = all(value is Agent._UNSET for value in (description, system_prompt, model, toolkits, response_format))
 
         if fetch_only:
             if row is None:
@@ -169,7 +172,7 @@ class Agent:
         '''
         create_class(f'Agents.Gateway.{self.name}Service', cls_text)
 
-    def usage(self) -> dict:
+    def usage(self, workflow: str | None = None) -> dict:
         ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
@@ -183,8 +186,14 @@ class Agent:
             FROM SQLUser.Usage
             WHERE agent_name = ?
         '''
+        params: list[str] = [self.name]
+        workflow_value = self._normalize_workflow(workflow)
 
-        cur.execute(sql, [self.name])
+        if workflow_value:
+            sql += ' AND workflow = ?'
+            params.append(workflow_value)
+
+        cur.execute(sql, tuple(params))
         row = cur.fetchone()
 
         return {
@@ -345,11 +354,14 @@ class Agent:
             Set tAssistantMessageId = ""
             Set tReasoningSummary = ""
             Set tReasoningSummarySep = ""
-            Set tLatestResponseOutput = ""
             Set tLatestReasoningDetailed = ""
+            Set tToolRequestJSON = ""
+            Set tToolChatMessage = ""
+            Set tInvokeToolSC = $$$OK
             Set tPersistReasoning = {persist_reasoning_int}
 
             Set tChatId = pRequest.ChatId
+            Set tWorkflow = pRequest.Workflow
             Set tUserMessage = pRequest.Message
             Set tResponseType = pRequest.ResponseType
             If tResponseType="" {{
@@ -372,7 +384,8 @@ class Agent:
                     Set sc = ##class(Agents.Utils.Common).AppendChat(
                         tChatId,
                         "user",
-                        tUserMessage
+                        tUserMessage,
+                        tWorkflow
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
@@ -466,9 +479,6 @@ class Agent:
                 Set tReasoningSummary = tReasoningSummary _ tReasoningSummarySep _ tLLMResp.ReasoningSummary
                 Set tReasoningSummarySep = $C(10,10)
             }}
-            If tLLMResp.ResponseOutput'="" {{
-                Set tLatestResponseOutput = tLLMResp.ResponseOutput
-            }}
             If tLLMResp.ReasoningDetailed'="" {{
                 Set tLatestReasoningDetailed = tLLMResp.ReasoningDetailed
             }}
@@ -489,6 +499,36 @@ class Agent:
                 {'Set logMsg = "ToolTurn="_toolTurns_" Toolkit="_tLLMResp.Toolkit_" Tool="_tLLMResp.Tool $$$LOGINFO(logMsg)' if self.debug else ''}
                 {'Set logMsg = "Tool params="_$Extract(##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),1,1000) $$$LOGINFO(logMsg)' if self.debug else ''}
 
+                Set tToolRequestJSON = ##class(Agents.Utils.Common).BuildLLMWrapperJSON(
+                    +tLLMResp.IsTool,
+                    tLLMResp.Toolkit,
+                    tLLMResp.Tool,
+                    tLLMResp.Content
+                )
+
+                If tChatId'="" {{
+                    Set stageSC = $$$OK
+                    Try {{
+                        Set sc = ##class(Agents.Utils.Common).AppendChat(
+                            tChatId,
+                            "assistant",
+                            tToolRequestJSON,
+                            tWorkflow
+                        )
+                        {'$$$LOGSTATUS(sc)' if self.debug else ''}
+                        If $$$ISERR(sc) {{
+                            Set stageSC = sc
+                        }}
+                    }} Catch ex {{
+                        $$$LOGERROR("Stage=AppendToolRequest exception")
+                        Set stageSC = ex.AsStatus()
+                    }}
+                    If $$$ISERR(stageSC) {{
+                        Set stopLoop = 1
+                        Quit
+                    }}
+                }}
+
                 Set stageSC = $$$OK
                 Try {{
                     Set sc = ..InvokeTool(tLLMResp.Toolkit, tLLMResp.Tool, tLLMResp.Content, .tToolResp)
@@ -500,33 +540,71 @@ class Agent:
                     $$$LOGERROR("Stage=InvokeTool exception")
                     Set stageSC = ex.AsStatus()
                 }}
-                If $$$ISERR(stageSC) {{
-                    Set stopLoop = 1
-                    Quit
+                Set tInvokeToolSC = stageSC
+
+                If $IsObject(tToolResp) {{
+                    {'Set logMsg = "Tool result="_$Extract(##class(Agents.Utils.Common).ToJSONString(tToolResp.Result),1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
+                    Set tToolChatMessage = ##class(Agents.Utils.Common).ToolResultToChat(
+                        tLLMResp.Toolkit,
+                        tLLMResp.Tool,
+                        ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet())
+                    )
+                }} Else {{
+                    Set tToolChatMessage = ""
                 }}
 
-                {'Set logMsg = "Tool result="_$Extract(##class(Agents.Utils.Common).ToJSONString(tToolResp.Result),1,1500) $$$LOGINFO(logMsg)' if self.debug else ''}
+                If (tChatId'="")&&(tToolChatMessage'="") {{
+                    Set stageSC = $$$OK
+                    Try {{
+                        Set sc = ##class(Agents.Utils.Common).AppendChat(
+                            tChatId,
+                            "developer",
+                            tToolChatMessage,
+                            tWorkflow
+                        )
+                        {'$$$LOGSTATUS(sc)' if self.debug else ''}
+                        If $$$ISERR(sc) {{
+                            Set stageSC = sc
+                        }}
+                    }} Catch ex {{
+                        $$$LOGERROR("Stage=AppendToolResult exception")
+                        Set stageSC = ex.AsStatus()
+                    }}
+                    If $$$ISERR(stageSC) {{
+                        Set stopLoop = 1
+                        Quit
+                    }}
+                }}
 
                 Set stageSC = $$$OK
                 Try {{
-                    Set sc = ##class(Agents.Utils.Common).LogToolUsage(
-                        tChatId,
-                        ..%ConfigName,
-                        tLLMResp.Toolkit,
-                        tLLMResp.Tool,
-                        ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),
-                        +tToolResp.OkGet(),
-                        ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet())
-                    )
-                    {'$$$LOGSTATUS(sc)' if self.debug else ''}
-                    If $$$ISERR(sc) {{
-                        Set stageSC = sc
+                    If $IsObject(tToolResp) {{
+                        Set sc = ##class(Agents.Utils.Common).LogToolUsage(
+                            tChatId,
+                            ..%ConfigName,
+                            tLLMResp.Toolkit,
+                            tLLMResp.Tool,
+                            ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),
+                            +tToolResp.OkGet(),
+                            ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet()),
+                            tWorkflow
+                        )
+                        {'$$$LOGSTATUS(sc)' if self.debug else ''}
+                        If $$$ISERR(sc) {{
+                            Set stageSC = sc
+                        }}
                     }}
                 }} Catch ex {{
                     $$$LOGERROR("Stage=LogToolUsage exception")
                     Set stageSC = ex.AsStatus()
                 }}
                 If $$$ISERR(stageSC) {{
+                    Set stopLoop = 1
+                    Quit
+                }}
+
+                If $$$ISERR(tInvokeToolSC) {{
+                    Set stageSC = tInvokeToolSC
                     Set stopLoop = 1
                     Quit
                 }}
@@ -543,12 +621,12 @@ class Agent:
                         ##class(Agents.Utils.Production).BuildNextLLMChatJSON(
                             tChatId,
                             tUserMessage,
+                            tToolRequestJSON,
                             tLLMResp.Toolkit,
                             tLLMResp.Tool,
                             tToolResp.Result,
                             ..GetSystemPrompt(),
-                            ..BuildToolManifest(),
-                            tLatestResponseOutput
+                            ..BuildToolManifest()
                         )
                     )
 
@@ -609,10 +687,6 @@ class Agent:
                     Set tReasoningSummary = tReasoningSummary _ tReasoningSummarySep _ tLLMResp.ReasoningSummary
                     Set tReasoningSummarySep = $C(10,10)
                 }}
-
-                If tLLMResp.ResponseOutput'="" {{
-                    Set tLatestResponseOutput = tLLMResp.ResponseOutput
-                }}
                 If tLLMResp.ReasoningDetailed'="" {{
                     Set tLatestReasoningDetailed = tLLMResp.ReasoningDetailed
                 }}
@@ -663,6 +737,7 @@ class Agent:
                         tFinalJSON,
                         tStoredReasoningSummary,
                         tStoredReasoningDetailed,
+                        tWorkflow,
                         .tAssistantMessageId
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
@@ -689,7 +764,8 @@ class Agent:
                         ##class(Agents.Utils.Common).GetRunningProductionName(),
                         "{self.model}",
                         tReasoningEffort,
-                        oneUsage
+                        oneUsage,
+                        tWorkflow
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
@@ -794,6 +870,19 @@ class Agent:
             return ''
         raise TypeError('chat must be Chat | str | None')
 
+    @staticmethod
+    def _normalize_workflow(
+        workflow: str | None,
+        chat: Chat | str | None = None,
+    ) -> str:
+        if workflow is None and isinstance(chat, Chat):
+            workflow = chat.workflow
+        if workflow is None:
+            return ''
+        if not isinstance(workflow, str):
+            raise TypeError('workflow must be str | None')
+        return workflow.strip()
+
     def _get_attached_toolkit(self, toolkit: str | Toolkit) -> Toolkit:
         toolkit_name = toolkit.name if isinstance(toolkit, Toolkit) else str(toolkit)
         toolkit_name = toolkit_name.strip()
@@ -886,6 +975,7 @@ class Agent:
         tool: str,
         params: dict | str | None = None,
         chat: Chat | str | None = None,
+        workflow: str | None = None,
     ):
         if not self.exists():
             raise KeyError(f"No Agent found for '{self.name}'")
@@ -895,6 +985,7 @@ class Agent:
             raise ValueError('tool must be a non-empty string')
 
         chat_id = self._normalize_chat_id(chat)
+        workflow_id = self._normalize_workflow(workflow, chat)
         toolkit_obj = self._get_attached_toolkit(toolkit)
 
         toolkit_obj.ensure_runtime_classes()
@@ -930,9 +1021,29 @@ class Agent:
             request_payload,
             response_ok,
             response_payload,
+            workflow_id,
         )
         if sc != 1:
             raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
+
+        if chat_id:
+            tool_chat_payload = irispy.classMethodValue(
+                'Agents.Utils.Common',
+                'ToolResultToChat',
+                toolkit_obj.name,
+                tool_name,
+                response_payload,
+            )
+            sc = irispy.classMethodValue(
+                'Agents.Utils.Common',
+                'AppendChat',
+                chat_id,
+                'developer',
+                tool_chat_payload,
+                workflow_id,
+            )
+            if sc != 1:
+                raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         return self._unwrap_tool_payload(response_payload)
 
@@ -942,6 +1053,7 @@ class Agent:
         chat: Chat | str | None = None,
         response_format: BaseModel | None = None,
         reasoning_effort: str | None = None,
+        workflow: str | None = None,
     ) -> str:
         
         if not self.exists():
@@ -949,7 +1061,7 @@ class Agent:
         
         irispy = get_connection(True)
 
-        prod_ref = iris.IRISReference("")
+        prod_ref = iris.IRISReference('')
         state_ref = iris.IRISReference(0)
 
         explicit_response_format = response_format
@@ -985,10 +1097,12 @@ class Agent:
             raise ValueError('Provide message=...')
 
         chat_id = self._normalize_chat_id(chat)
+        workflow_id = self._normalize_workflow(workflow, chat)
 
         payload = {
             'message': message,
             'chatId': chat_id,
+            'workflow': workflow_id,
             'responseType': (
                 f'Agents.Message.{effective_response_format.name}'
                 if effective_response_format

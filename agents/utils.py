@@ -4,9 +4,6 @@ import os
 
 load_dotenv()
 
-AGENTS_NAMESPACE = 'Agents'
-NAMESPACE_READY = False
-
 SCHEMA_DEFINITIONS = {
     'Prompt': {
         'create': '''
@@ -53,6 +50,7 @@ SCHEMA_DEFINITIONS = {
             CREATE TABLE Chat (
                 message_id BIGINT IDENTITY PRIMARY KEY,
                 id VARCHAR(200) NOT NULL,
+                workflow VARCHAR(200),
                 message_role VARCHAR(50) NOT NULL,
                 message VARCHAR(50000) NOT NULL,
                 reasoning_summary VARCHAR(50000),
@@ -61,6 +59,7 @@ SCHEMA_DEFINITIONS = {
         ''',
         'indexes': [
             'CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)',
+            'CREATE INDEX idx_chat_id_workflow_msgid ON Chat (id, workflow, message_id)',
         ],
     },
     'ToolUsage': {
@@ -69,6 +68,7 @@ SCHEMA_DEFINITIONS = {
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
                 chat_id VARCHAR(200),
+                workflow VARCHAR(200),
                 agent_name VARCHAR(200) NOT NULL,
                 toolkit VARCHAR(200) NOT NULL,
                 tool_name VARCHAR(200) NOT NULL,
@@ -79,6 +79,7 @@ SCHEMA_DEFINITIONS = {
         ''',
         'indexes': [
             'CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)',
+            'CREATE INDEX idx_toolusage_chat_workflow_ts ON ToolUsage (chat_id, workflow, usage_ts)',
         ],
     },
     'Usage': {
@@ -87,6 +88,7 @@ SCHEMA_DEFINITIONS = {
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
                 chat_id VARCHAR(200),
+                workflow VARCHAR(200),
                 message_id BIGINT,
                 agent_name VARCHAR(200),
                 production_name VARCHAR(200),
@@ -104,9 +106,11 @@ SCHEMA_DEFINITIONS = {
         ''',
         'indexes': [
             'CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)',
+            'CREATE INDEX idx_usage_chat_workflow_ts ON Usage (chat_id, workflow, usage_ts)',
             'CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)',
             'CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)',
             'CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)',
+            'CREATE INDEX idx_usage_workflow_ts ON Usage (workflow, usage_ts)',
         ],
     },
 }
@@ -122,11 +126,7 @@ def connect(namespace: str, obj: bool = False):
     return iris.createIRIS(conn) if obj else conn
 
 
-def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
-    global NAMESPACE_READY
-    if NAMESPACE_READY:
-        return
-
+def ensure_agents_namespace(namespace: str = 'Agents') -> None:
     irispy = connect('%SYS', obj=True)
 
     exists = int(irispy.classMethodValue('%SYS.Namespace', 'Exists', namespace))
@@ -141,8 +141,6 @@ def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
         sc = irispy.classMethodValue('%Library.EnsembleMgr', 'EnableNamespace', namespace, 1)
         if sc != 1:
             raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
-
-    NAMESPACE_READY = True
 
 def ensure_schema(*table_names: str) -> None:
     conn = get_connection()
@@ -183,8 +181,6 @@ def ensure_schema(*table_names: str) -> None:
     
 
 def get_connection(obj=False, namespace='Agents'):
-    if namespace=='Agents':
-        ensure_agents_namespace(namespace)
     return connect(namespace, obj)
 
 def create_class(cls_name: str, cls_text: str) -> None:
@@ -247,6 +243,7 @@ def ensure_common_utils():
             msg As %String,
             reasoningSummary As %String = "",
             reasoningDetailed As %String = "",
+            workflow As %String = "",
             Output pMessageId As %BigInt
         ) As %Status
         {
@@ -254,9 +251,9 @@ def ensure_common_utils():
             If $Get(chatId)="" Quit $$$OK
 
             &sql(INSERT INTO SQLUser.Chat
-                (id, message_role, message, reasoning_summary, reasoning_detailed)
+                (id, workflow, message_role, message, reasoning_summary, reasoning_detailed)
                 VALUES
-                (:chatId, :messageRole, :msg, :reasoningSummary, :reasoningDetailed))
+                (:chatId, :workflow, :messageRole, :msg, :reasoningSummary, :reasoningDetailed))
 
             If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
 
@@ -311,7 +308,8 @@ def ensure_common_utils():
             pProductionName As %String,
             pModel As %String,
             pReasoningEffort As %String,
-            pUsageJSON As %String
+            pUsageJSON As %String,
+            pWorkflow As %String = ""
         ) As %Status
         {
             Set sc = $$$OK
@@ -377,12 +375,12 @@ def ensure_common_utils():
             }
 
             &sql(INSERT INTO SQLUser.Usage
-            (usage_ts, chat_id, message_id, agent_name, production_name, model, reasoning_effort,
+            (usage_ts, chat_id, workflow, message_id, agent_name, production_name, model, reasoning_effort,
             input_tokens, output_tokens, total_tokens,
             input_cached_tokens, input_audio_tokens, output_audio_tokens,
             output_reasoning_tokens, duration_ms)
             VALUES
-            (:ts, :pChatId, :pMessageId, :pAgentName, :pProductionName, :pModel, :pReasoningEffort,
+            (:ts, :pChatId, :pWorkflow, :pMessageId, :pAgentName, :pProductionName, :pModel, :pReasoningEffort,
             :inputTokens, :outputTokens, :totalTokens,
             :inputCachedTokens, :inputAudioTokens, :outputAudioTokens,
             :outputReasoningTokens, :durationMs))
@@ -497,6 +495,20 @@ def ensure_common_utils():
             Quit out
         }
 
+        ClassMethod BuildLLMWrapperJSON(
+            isTool As %Integer,
+            toolkit As %String = "",
+            tool As %String = "",
+            content As %String = ""
+        ) As %String
+        {
+            Set wrapped = "{""IsTool"":"_$Select(+$Get(isTool):"true",1:"false")
+            Set wrapped = wrapped_",""Toolkit"":"""_$ZCONVERT($Get(toolkit),"O","JSON")_""""
+            Set wrapped = wrapped_",""Tool"":"""_$ZCONVERT($Get(tool),"O","JSON")_""""
+            Set wrapped = wrapped_",""Content"":"""_$ZCONVERT($Get(content),"O","JSON")_"""}"
+            Quit wrapped
+        }
+
         ClassMethod ToolResultToChat(toolkit As %String, tool As %String, result As %String) As %String
         {
             Set obj = ##class(%DynamicObject).%New()
@@ -515,12 +527,17 @@ def ensure_common_utils():
             Quit msg
         }
 
-        ClassMethod AppendChat(chatId As %String, messageRole As %String, msg As %String) As %Status
+        ClassMethod AppendChat(
+            chatId As %String,
+            messageRole As %String,
+            msg As %String,
+            workflow As %String = ""
+        ) As %Status
         {
             If $Get(chatId)="" Quit $$$OK
 
-            &sql(INSERT INTO SQLUser.Chat (id, message_role, message)
-                VALUES (:chatId, :messageRole, :msg))
+            &sql(INSERT INTO SQLUser.Chat (id, workflow, message_role, message)
+                VALUES (:chatId, :workflow, :messageRole, :msg))
 
             If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
             Quit $$$OK
@@ -560,7 +577,8 @@ def ensure_common_utils():
             pTool As %String,
             pRequestPayload As %String,
             pResponseOk As %Integer,
-            pResponsePayload As %String
+            pResponsePayload As %String,
+            pWorkflow As %String = ""
         ) As %Status
         {
             Set ts = $ZDATETIME($HOROLOG,3,1,3)
@@ -568,9 +586,9 @@ def ensure_common_utils():
             Set resp = $Extract($Get(pResponsePayload),1,200000)
 
             &sql(INSERT INTO SQLUser.ToolUsage
-                (usage_ts, chat_id, agent_name, toolkit, tool_name, request_payload, response_ok, response_payload)
+                (usage_ts, chat_id, workflow, agent_name, toolkit, tool_name, request_payload, response_ok, response_payload)
                 VALUES
-                (:ts, :pChatId, :pAgentName, :pToolkit, :pTool, :req, :pResponseOk, :resp))
+                (:ts, :pChatId, :pWorkflow, :pAgentName, :pToolkit, :pTool, :req, :pResponseOk, :resp))
 
             If SQLCODE < 0 {
                 Set err = "Failed to insert ToolUsage row. SQLCODE="_SQLCODE
@@ -821,29 +839,15 @@ def ensure_production_utils():
         ClassMethod BuildNextLLMChatJSON(
             chatId As %String,
             userText As %String = "",
+            assistantText As %String = "",
             toolkit As %String = "",
             tool As %String = "",
             toolResult As %String = "",
             systemPrompt As %String = "",
-            toolManifest As %String = "",
-            responseOutput As %String = ""
+            toolManifest As %String = ""
         ) As %String
         {{
             Set arr = ##class(%DynamicArray).%New()
-
-            Set priorOutputJson = $Get(responseOutput)
-            Set priorOutputJson = ..StripReasoningItems(priorOutputJson)
-
-            If priorOutputJson'="" {{
-                Try {{
-                    Set priorOutput = ##class(%DynamicArray).%FromJSON(priorOutputJson)
-                    For i=0:1:priorOutput.%Size()-1 {{
-                        Do arr.%Push(priorOutput.%Get(i))
-                    }}
-                }} Catch ex {{
-                    // ignore bad stored output
-                }}
-            }}
 
             If $Get(systemPrompt)'="" {{
                 Set s1 = ##class(%DynamicObject).%New()
@@ -877,15 +881,24 @@ def ensure_production_utils():
                     Do arr.%Push(obj)
                 }}
                 &sql(CLOSE c)
-            }} ElseIf $Get(userText)'="" {{
-                Set u = ##class(%DynamicObject).%New()
-                Do u.%Set("role","user")
-                Do u.%Set("content", userText)
-                Do arr.%Push(u)
-            }}
+            }} Else {{
+                If $Get(userText)'="" {{
+                    Set u = ##class(%DynamicObject).%New()
+                    Do u.%Set("role","user")
+                    Do u.%Set("content", userText)
+                    Do arr.%Push(u)
+                }}
 
-            If ($Get(toolkit)'="") && ($Get(tool)'="") {{
-                Do arr.%Push(##class(Agents.Utils.Common).BuildToolResultMessage(toolkit, tool, toolResult))
+                If $Get(assistantText)'="" {{
+                    Set a = ##class(%DynamicObject).%New()
+                    Do a.%Set("role","assistant")
+                    Do a.%Set("content", assistantText)
+                    Do arr.%Push(a)
+                }}
+
+                If ($Get(toolkit)'="") && ($Get(tool)'="") {{
+                    Do arr.%Push(##class(Agents.Utils.Common).BuildToolResultMessage(toolkit, tool, toolResult))
+                }}
             }}
 
             Quit arr.%ToJSON()
