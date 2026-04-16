@@ -17,21 +17,21 @@ class Message:
         parts = re.split(r'[^A-Za-z0-9]+', json_name)
         parts = [part for part in parts if part]
         if not parts:
-            raise ValueError(f"Invalid property name: {json_name!r}")
+            raise ValueError(f'Invalid property name: {json_name!r}')
         name = ''.join(part[:1].upper() + part[1:] for part in parts)
         if not name[0].isalpha():
-            name = "P" + name
+            name = 'P' + name
         return name
 
     def build(self, model: type[BaseModel]) -> None:
         schema = model.model_json_schema()
-        defs = schema.get("$defs", {})
+        defs = schema.get('$defs', {})
 
         scalar_type_map = {
-            "string": '%String(MAXLEN = "")',
-            "integer": "%Integer",
-            "number": "%Double",
-            "boolean": "%Boolean",
+            'string': '%String(MAXLEN = "")',
+            'integer': '%Integer',
+            'number': '%Double',
+            'boolean': '%Boolean',
         }
 
         built: set[str] = set()
@@ -40,9 +40,9 @@ class Message:
             if class_name in built:
                 return
 
-            properties = class_schema.get("properties", {})
+            properties = class_schema.get('properties', {})
             if not isinstance(properties, dict):
-                raise ValueError(f"Schema for {class_name} is not an object schema")
+                raise ValueError(f'Schema for {class_name} is not an object schema')
 
             lines: list[str] = []
             parent = f'Ens.{self.type}, %JSON.Adaptor' if top_level else '%SerialObject, %JSON.Adaptor'
@@ -53,18 +53,18 @@ class Message:
             deferred_props: list[str] = []
 
             for prop_name, prop_schema in properties.items():
-                if "anyOf" in prop_schema:
-                    non_null = [x for x in prop_schema["anyOf"] if x.get("type") != "null"]
+                if 'anyOf' in prop_schema:
+                    non_null = [x for x in prop_schema['anyOf'] if x.get('type') != 'null']
                     if len(non_null) == 1:
                         prop_schema = non_null[0]
 
                 iris_name = self.sanitize(prop_name)
 
-                if "$ref" in prop_schema:
-                    ref = prop_schema["$ref"]
-                    if not ref.startswith("#/$defs/"):
-                        raise ValueError(f"Unsupported schema ref: {ref}")
-                    nested_name = ref.split("/")[-1]
+                if '$ref' in prop_schema:
+                    ref = prop_schema['$ref']
+                    if not ref.startswith('#/$defs/'):
+                        raise ValueError(f'Unsupported schema ref: {ref}')
+                    nested_name = ref.split('/')[-1]
 
                     compile_schema(nested_name, defs[nested_name], False)
                     deferred_props.append(
@@ -72,29 +72,29 @@ class Message:
                     )
                     continue
 
-                prop_type = prop_schema.get("type")
+                prop_type = prop_schema.get('type')
 
-                if prop_type == "object":
-                    inline_class_name = f"{class_name}{iris_name}"
+                if prop_type == 'object':
+                    inline_class_name = f'{class_name}{iris_name}'
                     compile_schema(inline_class_name, prop_schema, False)
                     deferred_props.append(
                         f'Property {iris_name} As Agents.Message.{inline_class_name}(%JSONFIELDNAME = "{prop_name}");'
                     )
                     continue
 
-                if prop_type == "array":
-                    items = prop_schema.get("items", {})
+                if prop_type == 'array':
+                    items = prop_schema.get('items', {})
 
-                    if "anyOf" in items:
-                        non_null = [x for x in items["anyOf"] if x.get("type") != "null"]
+                    if 'anyOf' in items:
+                        non_null = [x for x in items['anyOf'] if x.get('type') != 'null']
                         if len(non_null) == 1:
                             items = non_null[0]
 
-                    if "$ref" in items:
-                        ref = items["$ref"]
-                        if not ref.startswith("#/$defs/"):
-                            raise ValueError(f"Unsupported schema ref: {ref}")
-                        nested_name = ref.split("/")[-1]
+                    if '$ref' in items:
+                        ref = items['$ref']
+                        if not ref.startswith('#/$defs/'):
+                            raise ValueError(f'Unsupported schema ref: {ref}')
+                        nested_name = ref.split('/')[-1]
 
                         compile_schema(nested_name, defs[nested_name], False)
                         deferred_props.append(
@@ -102,10 +102,10 @@ class Message:
                         )
                         continue
 
-                    item_type = items.get("type")
+                    item_type = items.get('type')
 
-                    if item_type == "object":
-                        inline_class_name = f"{class_name}{iris_name}Item"
+                    if item_type == 'object':
+                        inline_class_name = f'{class_name}{iris_name}Item'
                         compile_schema(inline_class_name, items, False)
                         deferred_props.append(
                             f'Property {iris_name} As list Of Agents.Message.{inline_class_name}(%JSONFIELDNAME = "{prop_name}");'
@@ -122,7 +122,7 @@ class Message:
                     continue
 
                 scalar_iris = scalar_type_map.get(prop_type, '%String(MAXLEN = "")')
-                if "(" in scalar_iris and scalar_iris.endswith(")"):
+                if '(' in scalar_iris and scalar_iris.endswith(')'):
                     scalar_expr = scalar_iris[:-1] + f', %JSONFIELDNAME = "{prop_name}")'
                 else:
                     scalar_expr = f'{scalar_iris}(%JSONFIELDNAME = "{prop_name}")'

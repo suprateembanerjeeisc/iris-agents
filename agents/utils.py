@@ -4,22 +4,22 @@ import os
 
 load_dotenv()
 
-AGENTS_NAMESPACE = "Agents"
+AGENTS_NAMESPACE = 'Agents'
 NAMESPACE_READY = False
 
 SCHEMA_DEFINITIONS = {
-    "Prompt": {
-        "create": """
+    'Prompt': {
+        'create': '''
             CREATE TABLE Prompt (
                 prompt_id VARCHAR(200) NOT NULL,
                 prompt_text VARCHAR(200) NOT NULL,
                 version INT NOT NULL,
                 PRIMARY KEY (prompt_id, version)
             )
-        """,
+        ''',
     },
-    "Agent": {
-        "create": """
+    'Agent': {
+        'create': '''
             CREATE TABLE Agent (
                 agent_name VARCHAR(200) NOT NULL PRIMARY KEY,
                 description VARCHAR(4000),
@@ -29,27 +29,27 @@ SCHEMA_DEFINITIONS = {
                 reasoning_effort VARCHAR(50),
                 persist_reasoning INTEGER
             )
-        """,
+        ''',
     },
-    "AgentToolkit": {
-        "create": """
+    'AgentToolkit': {
+        'create': '''
             CREATE TABLE AgentToolkit (
                 agent_name VARCHAR(200) NOT NULL,
                 toolkit_id VARCHAR(200) NOT NULL,
                 PRIMARY KEY (agent_name, toolkit_id)
             )
-        """,
+        ''',
     },
-    "Toolkit": {
-        "create": """
+    'Toolkit': {
+        "create": '''
             CREATE TABLE Toolkit (
                 toolkit_id VARCHAR(200) NOT NULL PRIMARY KEY,
                 toolkit_url VARCHAR(1000) NOT NULL
             )
-        """,
+        ''',
     },
-    "Chat": {
-        "create": """
+    'Chat': {
+        'create': '''
             CREATE TABLE Chat (
                 message_id BIGINT IDENTITY PRIMARY KEY,
                 id VARCHAR(200) NOT NULL,
@@ -58,13 +58,13 @@ SCHEMA_DEFINITIONS = {
                 reasoning_summary VARCHAR(50000),
                 reasoning_detailed VARCHAR(50000)
             )
-        """,
-        "indexes": [
-            "CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)",
+        ''',
+        'indexes': [
+            'CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)',
         ],
     },
-    "ToolUsage": {
-        "create": """
+    'ToolUsage': {
+        'create': '''
             CREATE TABLE ToolUsage (
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
@@ -76,13 +76,13 @@ SCHEMA_DEFINITIONS = {
                 response_ok INTEGER NOT NULL,
                 response_payload VARCHAR(50000) NOT NULL
             )
-        """,
-        "indexes": [
-            "CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)",
+        ''',
+        'indexes': [
+            'CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)',
         ],
     },
-    "Usage": {
-        "create": """
+    'Usage': {
+        'create': '''
             CREATE TABLE Usage (
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
@@ -101,23 +101,23 @@ SCHEMA_DEFINITIONS = {
                 output_reasoning_tokens BIGINT,
                 duration_ms BIGINT
             )
-        """,
-        "indexes": [
-            "CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)",
-            "CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)",
-            "CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)",
-            "CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)",
+        ''',
+        'indexes': [
+            'CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)',
+            'CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)',
+            'CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)',
+            'CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)',
         ],
     },
 }
 
 def connect(namespace: str, obj: bool = False):
     conn = iris.connect(
-        hostname=os.environ["IRIS_HOSTNAME"],
-        port=int(os.environ["IRIS_PORT"]),
+        hostname=os.environ['IRIS_HOSTNAME'],
+        port=int(os.environ['IRIS_PORT']),
         namespace=namespace,
-        username=os.environ["IRIS_USERNAME"],
-        password=os.environ["IRIS_PASSWORD"],
+        username=os.environ['IRIS_USERNAME'],
+        password=os.environ['IRIS_PASSWORD'],
     )
     return iris.createIRIS(conn) if obj else conn
 
@@ -127,20 +127,20 @@ def ensure_agents_namespace(namespace: str = AGENTS_NAMESPACE) -> None:
     if NAMESPACE_READY:
         return
 
-    irispy = connect("%SYS", obj=True)
+    irispy = connect('%SYS', obj=True)
 
-    exists = int(irispy.classMethodValue("%SYS.Namespace", "Exists", namespace))
+    exists = int(irispy.classMethodValue('%SYS.Namespace', 'Exists', namespace))
     if exists != 1:
-        irispy.classMethodObject("%SQL.Statement", "%ExecDirect", "", f"CREATE DATABASE {namespace}")
+        irispy.classMethodObject('%SQL.Statement', '%ExecDirect', '', f'CREATE DATABASE {namespace}')
 
     nsiris = connect(namespace, obj=True)
-    has_req = int(nsiris.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", "Ens.Request"))
-    has_bo = int(nsiris.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", "Ens.BusinessOperation"))
+    has_req = int(nsiris.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', 'Ens.Request'))
+    has_bo = int(nsiris.classMethodValue('%Dictionary.ClassDefinition', '%ExistsId', 'Ens.BusinessOperation'))
 
     if not (has_req == 1 and has_bo == 1):
-        sc = irispy.classMethodValue("%Library.EnsembleMgr", "EnableNamespace", namespace, 1)
+        sc = irispy.classMethodValue('%Library.EnsembleMgr', 'EnableNamespace', namespace, 1)
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
     NAMESPACE_READY = True
 
@@ -149,12 +149,12 @@ def ensure_schema(*table_names: str) -> None:
     cur = conn.cursor()
 
     cur.execute(
-        """
+        '''
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.Tables
         WHERE TABLE_TYPE='BASE TABLE'
         AND TABLE_SCHEMA='SQLUser'
-        """
+        '''
     )
     existing_tables = {row[0] for row in cur.fetchall()}
 
@@ -165,16 +165,16 @@ def ensure_schema(*table_names: str) -> None:
 
     for name in names:
         if name not in SCHEMA_DEFINITIONS:
-            raise KeyError(f"Unknown schema definition: {name}")
+            raise KeyError(f'Unknown schema definition: {name}')
 
         definition = SCHEMA_DEFINITIONS[name]
 
         if name not in existing_tables:
-            cur.execute(definition["create"])
+            cur.execute(definition['create'])
             conn.commit()
             existing_tables.add(name)
 
-        for index_sql in definition.get("indexes", []):
+        for index_sql in definition.get('indexes', []):
             try:
                 cur.execute(index_sql)
                 conn.commit()
@@ -210,7 +210,7 @@ def create_class(cls_name: str, cls_text: str) -> None:
     )
 
     if sc != 1:
-        raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+        raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
 def ensure_common_utils():
     cls_text = r'''Class Agents.Utils.Common Extends %RegisteredObject
@@ -588,7 +588,7 @@ def ensure_common_utils():
 
 def ensure_production_utils():
 
-    ensure_schema("Chat")
+    ensure_schema('Chat')
     
     cls_text = f'''Class Agents.Utils.Production Extends %RegisteredObject
     {{

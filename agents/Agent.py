@@ -1,5 +1,4 @@
 import json
-import pandas as pd
 import iris
 from pydantic import BaseModel
 
@@ -26,12 +25,12 @@ class Agent:
         debug:bool = False
     ):
         self.debug = debug
-        ensure_schema("Agent", "AgentToolkit")
+        ensure_schema('Agent', 'AgentToolkit')
         conn = get_connection()
         cur = conn.cursor()
 
         cur.execute(
-            """
+            '''
             SELECT
                 agent_name,
                 description,
@@ -42,7 +41,7 @@ class Agent:
                 persist_reasoning
             FROM Agent
             WHERE agent_name = ?
-            """,
+            ''',
             (name,),
         )
         row = cur.fetchone()
@@ -61,12 +60,12 @@ class Agent:
             self.reasoning_effort = reasoning_effort
             self.persist_reasoning = bool(1 if persist_reasoning is None else persist_reasoning)
             self.response_format = (
-                Message(response_format, None, message_type="Response")
+                Message(response_format, None, message_type='Response')
                 if response_format else None
             )
 
             cur.execute(
-                "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
+                'SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?',
                 (self.name,),
             )
             toolkit_rows = cur.fetchall()
@@ -74,7 +73,7 @@ class Agent:
             return
 
         if model is Agent._UNSET:
-            raise KeyError("When creating/updating an agent, provide at least model.")
+            raise KeyError('When creating/updating an agent, provide at least model.')
 
         description_value = None if description is Agent._UNSET else description
         system_prompt_id = system_prompt.name if isinstance(system_prompt, Prompt) else None
@@ -86,15 +85,15 @@ class Agent:
             response_message = Message(
                 response_format.__name__,
                 response_format,
-                message_type="Response",
+                message_type='Response',
             )
             response_format_name = response_message.name
 
         if row is None:
             cur.execute(
-                """INSERT INTO Agent
+                '''INSERT INTO Agent
                 (agent_name, description, system_prompt_id, model, response_format, reasoning_effort, persist_reasoning)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?)''',
                 (
                     name,
                     description_value,
@@ -108,14 +107,14 @@ class Agent:
             conn.commit()
         else:
             cur.execute(
-                """UPDATE Agent SET
+                '''UPDATE Agent SET
                     description = ?,
                     system_prompt_id = ?,
                     model = ?,
                     response_format = ?,
                     reasoning_effort = ?,
                     persist_reasoning = ?
-                WHERE agent_name = ?""",
+                WHERE agent_name = ?''',
                 (
                     description_value,
                     system_prompt_id,
@@ -128,7 +127,7 @@ class Agent:
             )
             conn.commit()
 
-            cur.execute("DELETE FROM AgentToolkit WHERE agent_name = ?", (name,))
+            cur.execute('DELETE FROM AgentToolkit WHERE agent_name = ?', (name,))
             conn.commit()
 
         self.name = name
@@ -147,8 +146,8 @@ class Agent:
         if not self.exists():
             raise KeyError(f"No Agent found for '{self.name}'")
         return (
-            f"Agent(name={self.name!r}, model={self.model!r}, "
-            f"system_prompt={getattr(self.system_prompt, 'name', None)!r})"
+            f'Agent(name={self.name!r}, model={self.model!r}, '
+            f'system_prompt={getattr(self.system_prompt, 'name', None)!r})'
         )
 
     def create_gateway(self) -> None:
@@ -171,11 +170,11 @@ class Agent:
         create_class(f'Agents.Gateway.{self.name}Service', cls_text)
 
     def usage(self) -> dict:
-        ensure_schema("Usage")
+        ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
 
-        sql = """
+        sql = '''
             SELECT
                 COALESCE(SUM(input_tokens), 0),
                 COALESCE(SUM(output_tokens), 0),
@@ -183,29 +182,29 @@ class Agent:
                 COALESCE(SUM(total_tokens), 0)
             FROM SQLUser.Usage
             WHERE agent_name = ?
-        """
+        '''
 
         cur.execute(sql, [self.name])
         row = cur.fetchone()
 
         return {
-            "input_tokens": int(row[0] or 0),
-            "output_tokens": int(row[1] or 0),
-            "output_reasoning_tokens": int(row[2] or 0),
-            "total_tokens": int(row[3] or 0),
+            'input_tokens': int(row[0] or 0),
+            'output_tokens': int(row[1] or 0),
+            'output_reasoning_tokens': int(row[2] or 0),
+            'total_tokens': int(row[3] or 0),
         }
 
     def create_process(self) -> None:
         if self.response_format:
-            default_response_cls = f"Agents.Message.{self.response_format.name}"
+            default_response_cls = f'Agents.Message.{self.response_format.name}'
         else:
-            default_response_cls = "Agents.Message.Response"
+            default_response_cls = 'Agents.Message.Response'
 
-        system_prompt_text = self.system_prompt.text if self.system_prompt else ""
-        system_prompt_json = json.dumps(system_prompt_text or "")
+        system_prompt_text = self.system_prompt.text if self.system_prompt else ''
+        system_prompt_json = json.dumps(system_prompt_text or '')
         persist_reasoning_int = 1 if self.persist_reasoning else 0
 
-        toolkit_manifest_blocks = ""
+        toolkit_manifest_blocks = ''
 
         for toolkit in (self.toolkits or []):
             toolkit_name = toolkit.name.replace('"', '""')
@@ -734,7 +733,7 @@ class Agent:
         cur = conn.cursor()
 
         cur.execute(
-            "SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?",
+            'SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?',
             (self.name,),
         )
         db_existing_ids = {toolkit_id for (toolkit_id,) in cur.fetchall()}
@@ -752,7 +751,7 @@ class Agent:
                 continue
 
             cur.execute(
-                "INSERT INTO AgentToolkit (agent_name, toolkit_id) VALUES (?, ?)",
+                'INSERT INTO AgentToolkit (agent_name, toolkit_id) VALUES (?, ?)',
                 (self.name, toolkit_id),
             )
 
@@ -774,7 +773,7 @@ class Agent:
 
         for toolkit_id in toolkit_ids_to_remove:
             cur.execute(
-                "DELETE FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?",
+                'DELETE FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
                 (self.name, toolkit_id),
             )
 
@@ -793,19 +792,19 @@ class Agent:
             return chat
         if chat is None:
             return ''
-        raise TypeError("chat must be Chat | str | None")
+        raise TypeError('chat must be Chat | str | None')
 
     def _get_attached_toolkit(self, toolkit: str | Toolkit) -> Toolkit:
         toolkit_name = toolkit.name if isinstance(toolkit, Toolkit) else str(toolkit)
         toolkit_name = toolkit_name.strip()
 
         if not toolkit_name:
-            raise ValueError("toolkit must be a non-empty string")
+            raise ValueError('toolkit must be a non-empty string')
 
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT 1 FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?",
+            'SELECT 1 FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
             (self.name, toolkit_name),
         )
 
@@ -817,7 +816,7 @@ class Agent:
     @staticmethod
     def _coerce_tool_params(params: dict | str | None) -> str:
         if params is None:
-            return "{}"
+            return '{}'
 
         if isinstance(params, dict):
             return json.dumps(params, ensure_ascii=False)
@@ -826,14 +825,14 @@ class Agent:
             try:
                 parsed = json.loads(params)
             except json.JSONDecodeError as exc:
-                raise ValueError("params must be valid JSON text") from exc
+                raise ValueError('params must be valid JSON text') from exc
 
             if not isinstance(parsed, dict):
-                raise ValueError("params JSON must decode to an object")
+                raise ValueError('params JSON must decode to an object')
 
             return json.dumps(parsed, ensure_ascii=False)
 
-        raise TypeError("params must be dict | str | None")
+        raise TypeError('params must be dict | str | None')
 
     @staticmethod
     def _parse_json_if_possible(value: str):
@@ -849,11 +848,11 @@ class Agent:
         if not isinstance(parsed, dict):
             return parsed
 
-        result = parsed.get("result")
+        result = parsed.get('result')
         if not isinstance(result, dict):
             return parsed
 
-        content = result.get("content")
+        content = result.get('content')
         if not isinstance(content, list):
             return result
 
@@ -863,15 +862,15 @@ class Agent:
                 items.append(item)
                 continue
 
-            item_type = item.get("type")
+            item_type = item.get('type')
 
-            if item_type == "text":
-                items.append(cls._parse_json_if_possible(item.get("text", "")))
+            if item_type == 'text':
+                items.append(cls._parse_json_if_possible(item.get('text', '')))
                 continue
 
-            if item_type == "json":
-                if "json" in item:
-                    items.append(item.get("json"))
+            if item_type == 'json':
+                if 'json' in item:
+                    items.append(item.get('json'))
                     continue
 
             items.append(item)
@@ -891,39 +890,39 @@ class Agent:
         if not self.exists():
             raise KeyError(f"No Agent found for '{self.name}'")
 
-        tool_name = tool.strip() if isinstance(tool, str) else ""
+        tool_name = tool.strip() if isinstance(tool, str) else ''
         if not tool_name:
-            raise ValueError("tool must be a non-empty string")
+            raise ValueError('tool must be a non-empty string')
 
         chat_id = self._normalize_chat_id(chat)
         toolkit_obj = self._get_attached_toolkit(toolkit)
 
         toolkit_obj.ensure_runtime_classes()
-        ensure_schema("ToolUsage")
+        ensure_schema('ToolUsage')
 
         request_payload = self._coerce_tool_params(params)
 
         irispy = get_connection(True)
         ok_ref = iris.IRISReference(0)
-        result_ref = iris.IRISReference("")
+        result_ref = iris.IRISReference('')
 
         sc = irispy.classMethodValue(
-            f"Agents.Operation.Toolkit{toolkit_obj.name}",
-            "CallTool",
+            f'Agents.Operation.Toolkit{toolkit_obj.name}',
+            'CallTool',
             tool_name,
             request_payload,
             ok_ref,
             result_ref,
         )
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         response_ok = int(ok_ref.getValue() or 0)
-        response_payload = result_ref.getValue() or ""
+        response_payload = result_ref.getValue() or ''
 
         sc = irispy.classMethodValue(
-            "Agents.Utils.Common",
-            "LogToolUsage",
+            'Agents.Utils.Common',
+            'LogToolUsage',
             chat_id,
             self.name,
             toolkit_obj.name,
@@ -933,7 +932,7 @@ class Agent:
             response_payload,
         )
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         return self._unwrap_tool_payload(response_payload)
 
@@ -956,75 +955,75 @@ class Agent:
         explicit_response_format = response_format
 
         effective_response_format = (
-            Message(response_format.__name__, response_format, message_type="Response")
+            Message(response_format.__name__, response_format, message_type='Response')
             if response_format
             else self.response_format
         )
 
         sc = irispy.classMethodValue(
-            "Ens.Director", "GetProductionStatus", prod_ref, state_ref, 10, 0
+            'Ens.Director', 'GetProductionStatus', prod_ref, state_ref, 10, 0
         )
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         production_name = prod_ref.getValue()
         if not production_name:
-            raise RuntimeError("No production is currently running in this namespace.")
+            raise RuntimeError('No production is currently running in this namespace.')
 
         state_text = irispy.classMethodValue(
-            "Ens.Config.Production",
-            "ProductionStateToText",
+            'Ens.Config.Production',
+            'ProductionStateToText',
             state_ref.getValue(),
             0,
         )
-        if state_text != "Running":
+        if state_text != 'Running':
             raise RuntimeError(
                 f"Production '{production_name}' is not Running (state={state_text})."
             )
 
         if message is None:
-            raise ValueError("Provide message=...")
+            raise ValueError('Provide message=...')
 
         chat_id = self._normalize_chat_id(chat)
 
         payload = {
-            "message": message,
-            "chatId": chat_id,
-            "responseType": (
-                f"Agents.Message.{effective_response_format.name}"
+            'message': message,
+            'chatId': chat_id,
+            'responseType': (
+                f'Agents.Message.{effective_response_format.name}'
                 if effective_response_format
-                else "Agents.Message.Response"
+                else 'Agents.Message.Response'
             ),
-            "reasoningEffort": reasoning_effort or self.reasoning_effort,
+            'reasoningEffort': reasoning_effort or self.reasoning_effort,
         }
 
-        request_object = irispy.classMethodObject("Agents.Message.Request", "%New")
-        request_object.invoke("%JSONImport", json.dumps(payload))
+        request_object = irispy.classMethodObject('Agents.Message.Request', '%New')
+        request_object.invoke('%JSONImport', json.dumps(payload))
 
         gateway_item = f'{self.name}Gateway'
 
         service_ref = iris.IRISReference(None)
-        sc = irispy.classMethodValue("Ens.Director", "CreateBusinessService", gateway_item, service_ref)
+        sc = irispy.classMethodValue('Ens.Director', 'CreateBusinessService', gateway_item, service_ref)
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         service_object = service_ref.getValue()
 
         response_ref = iris.IRISReference(None)
-        hint_ref = iris.IRISReference("")
+        hint_ref = iris.IRISReference('')
 
-        sc = service_object.invoke("ProcessInput", request_object, response_ref, hint_ref)
+        sc = service_object.invoke('ProcessInput', request_object, response_ref, hint_ref)
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         response_object = response_ref.getValue()
         if response_object is None:
-            raise RuntimeError("Gateway returned no response object.")
+            raise RuntimeError('Gateway returned no response object.')
 
-        out_ref = iris.IRISReference("")
-        sc = response_object.invoke("%JSONExportToString", out_ref)
+        out_ref = iris.IRISReference('')
+        sc = response_object.invoke('%JSONExportToString', out_ref)
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         raw = out_ref.getValue()
 
@@ -1032,10 +1031,10 @@ class Agent:
             data = json.loads(raw)
 
             if isinstance(data, dict):
-                if data.get("ChatId", "") == "":
-                    data.pop("ChatId", None)
-                if data.get("chatId", "") == "":
-                    data.pop("chatId", None)
+                if data.get('ChatId', '') == '':
+                    data.pop('ChatId', None)
+                if data.get('chatId', '') == '':
+                    data.pop('chatId', None)
 
                 raw = json.dumps(data)
 
@@ -1043,14 +1042,14 @@ class Agent:
                     explicit_response_format is None and self.response_format is None
                 ) or (
                     effective_response_format is not None
-                    and getattr(effective_response_format, "name", "") == "Response"
+                    and getattr(effective_response_format, 'name', '') == 'Response'
                 )
 
                 if using_default_response:
-                    if "message" in data and isinstance(data["message"], str):
-                        return data["message"]
-                    if "Message" in data and isinstance(data["Message"], str):
-                        return data["Message"]
+                    if 'message' in data and isinstance(data['message'], str):
+                        return data['message']
+                    if 'Message' in data and isinstance(data['Message'], str):
+                        return data['Message']
 
         except json.JSONDecodeError:
             pass
@@ -1067,7 +1066,7 @@ class Agent:
         return self.name == other.name
     
     def delete(self) -> None:
-        """
+        '''
         Delete only agent-owned artifacts.
 
         This removes:
@@ -1082,7 +1081,7 @@ class Agent:
         - toolkit operation classes
         - shared utility classes
         - productions
-        """
+        '''
 
         if not self.exists():
             raise KeyError(f"No Agent found for '{self.name}'")
@@ -1095,55 +1094,55 @@ class Agent:
 
         # Delete DB rows first
         try:
-            cur.execute("DELETE FROM AgentToolkit WHERE agent_name = ?", (self.name,))
+            cur.execute('DELETE FROM AgentToolkit WHERE agent_name = ?', (self.name,))
             conn.commit()
         except Exception as e:
-            errors.append(f"DELETE AgentToolkit failed for {self.name}: {e}")
+            errors.append(f'DELETE AgentToolkit failed for {self.name}: {e}')
 
         try:
-            cur.execute("DELETE FROM Agent WHERE agent_name = ?", (self.name,))
+            cur.execute('DELETE FROM Agent WHERE agent_name = ?', (self.name,))
             conn.commit()
         except Exception as e:
-            errors.append(f"DELETE Agent failed for {self.name}: {e}")
+            errors.append(f'DELETE Agent failed for {self.name}: {e}')
 
         # Delete runtime classes
-        gateway_class = f"Agents.Gateway.{self.name}Service"
-        process_class = f"Agents.Process.{self.name}"
+        gateway_class = f'Agents.Gateway.{self.name}Service'
+        process_class = f'Agents.Process.{self.name}'
 
         try:
             sc = irispy.classMethodValue(
-                "Agents.Admin",
-                "DeleteClassIfExists",
+                'Agents.Admin',
+                'DeleteClassIfExists',
                 gateway_class
             )
             if sc != 1:
                 errors.append(
-                    f"DeleteClassIfExists({gateway_class}) failed: "
-                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                    f'DeleteClassIfExists({gateway_class}) failed: '
+                    f'{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}'
                 )
         except Exception as e:
-            errors.append(f"DeleteClassIfExists({gateway_class}) raised: {e}")
+            errors.append(f'DeleteClassIfExists({gateway_class}) raised: {e}')
 
         try:
             sc = irispy.classMethodValue(
-                "Agents.Admin",
-                "DeleteClassIfExists",
+                'Agents.Admin',
+                'DeleteClassIfExists',
                 process_class
             )
             if sc != 1:
                 errors.append(
-                    f"DeleteClassIfExists({process_class}) failed: "
-                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                    f'DeleteClassIfExists({process_class}) failed: '
+                    f'{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}'
                 )
         except Exception as e:
-            errors.append(f"DeleteClassIfExists({process_class}) raised: {e}")
+            errors.append(f'DeleteClassIfExists({process_class}) raised: {e}')
 
         if errors:
-            raise RuntimeError("Agent cleanup encountered errors:\n" + "\n".join(errors))
+            raise RuntimeError('Agent cleanup encountered errors:\n' + '\n'.join(errors))
         
     def exists(self) -> bool:
-        ensure_schema("Agent")
+        ensure_schema('Agent')
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM Agent WHERE agent_name = ?", (self.name,))
+        cur.execute('SELECT 1 FROM Agent WHERE agent_name = ?', (self.name,))
         return cur.fetchone() is not None

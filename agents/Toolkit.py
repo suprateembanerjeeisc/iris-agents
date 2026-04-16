@@ -1,7 +1,6 @@
 from .utils import get_connection, create_class, ensure_common_utils, ensure_schema
 from .models import ToolRequest, ToolResponse
 from .Message import Message
-import iris
 import time
 from urllib.parse import urlparse
 
@@ -10,7 +9,7 @@ class Toolkit:
 
     def __init__(self, name: str, url: str | None = None):
         self.name = name
-        ensure_schema("Toolkit")
+        ensure_schema('Toolkit')
         should_rebuild_runtime = False
 
         conn = get_connection()
@@ -18,7 +17,7 @@ class Toolkit:
 
         # Fetch existing
         cur.execute(
-            "SELECT toolkit_url FROM Toolkit WHERE toolkit_id = ?",
+            'SELECT toolkit_url FROM Toolkit WHERE toolkit_id = ?',
             (name,)
         )
         row = cur.fetchone()
@@ -35,7 +34,7 @@ class Toolkit:
             existing_url = row[0]
             if existing_url != url:
                 cur.execute(
-                    "UPDATE Toolkit SET toolkit_url = ? WHERE toolkit_id = ?",
+                    'UPDATE Toolkit SET toolkit_url = ? WHERE toolkit_id = ?',
                     (url, name)
                 )
                 conn.commit()
@@ -43,7 +42,7 @@ class Toolkit:
             self.url = url
         else:
             cur.execute(
-                "INSERT INTO Toolkit (toolkit_id, toolkit_url) VALUES (?, ?)",
+                'INSERT INTO Toolkit (toolkit_id, toolkit_url) VALUES (?, ?)',
                 (name, url)
             )
             conn.commit()
@@ -75,7 +74,7 @@ class Toolkit:
 
         if missing:
             raise RuntimeError(
-                "Dependency classes still missing after 10 seconds: "
+                'Dependency classes still missing after 10 seconds: '
                 + ", ".join(missing)
             )
 
@@ -87,9 +86,9 @@ class Toolkit:
 
         parsed = urlparse(self.url)
         host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        path = parsed.path or "/mcp"
-        https = 1 if parsed.scheme == "https" else 0
+        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+        path = parsed.path or '/mcp'
+        https = 1 if parsed.scheme == 'https' else 0
 
         cls_text = f'''Class {cls_name} Extends Ens.BusinessOperation
         {{

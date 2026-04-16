@@ -7,24 +7,24 @@ load_dotenv()
 
 class Prompt:
     def __init__(self, name: str, text: str | None = None, version: int | None = None):
-        ensure_schema("Prompt")
+        ensure_schema('Prompt')
         conn = get_connection()
         cur = conn.cursor()
 
         # Fetch prompt rows
         if version is None:
             cur.execute(
-                """SELECT prompt_id, prompt_text, version
+                '''SELECT prompt_id, prompt_text, version
                    FROM Prompt
                    WHERE prompt_id = ?
-                   ORDER BY version DESC""",
+                   ORDER BY version DESC''',
                 (name,),
             )
         else:
             cur.execute(
-                """SELECT prompt_id, prompt_text, version
+                '''SELECT prompt_id, prompt_text, version
                    FROM Prompt
-                   WHERE prompt_id = ? AND version = ?""",
+                   WHERE prompt_id = ? AND version = ?''',
                 (name, version),
             )
 
@@ -69,8 +69,7 @@ class Prompt:
 
         new_version = current_version + 1
         cur.execute(
-            """INSERT INTO Prompt (prompt_id, prompt_text, version)
-               VALUES (?, ?, ?)""",
+            '''INSERT INTO Prompt (prompt_id, prompt_text, version) VALUES (?, ?, ?)''',
             (name, text, new_version),
         )
         conn.commit()
@@ -80,10 +79,10 @@ class Prompt:
         self.version = new_version
 
     def __repr__(self) -> str:
-        return f"Prompt(name={self.name!r}, version={self.version}, text={self.text!r})"
+        return f'Prompt(name={self.name!r}, version={self.version}, text={self.text!r})'
 
     def __str__(self) -> str:
-        return self.text or ""
+        return self.text or ''
 
     def __eq__(self, other):
         if not isinstance(other, Prompt):
@@ -114,7 +113,7 @@ class Prompt:
         required = set(self.get_variables())
         missing = required - vars.keys()
         if missing:
-            raise KeyError(f"Missing variables {sorted(missing)} for the selected prompt")
+            raise KeyError(f'Missing variables {sorted(missing)} for the selected prompt')
 
         return self.text.format(**vars)
     
@@ -122,7 +121,7 @@ class Prompt:
         conn = get_connection()
         cur = conn.cursor()
 
-        cur.execute("DELETE FROM Prompt WHERE prompt_id = ?", (self.name,))
+        cur.execute('DELETE FROM Prompt WHERE prompt_id = ?', (self.name,))
         conn.commit()
 
         self.text = None

@@ -1,9 +1,7 @@
 from dotenv import load_dotenv
 import iris
-import json
 import os
 
-from .Toolkit import Toolkit
 from .Message import Message
 from .Agent import Agent
 from .models import LLMRequest, LLMResponse, Request, Response, LLMOutput
@@ -52,17 +50,15 @@ class Production:
 
             self.build()
 
-    def usage(
-        self,
-        agents: list[Agent] | None = None,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-    ) -> dict:
+    def usage(self,
+              agents: list[Agent] | None = None,
+              model: str | None = None,
+              reasoning_effort: str | None = None) -> dict:
         ensure_schema("Usage")
         conn = get_connection()
         cur = conn.cursor()
 
-        sql = """
+        sql = '''
             SELECT
                 COALESCE(SUM(input_tokens), 0),
                 COALESCE(SUM(output_tokens), 0),
@@ -70,48 +66,40 @@ class Production:
                 COALESCE(SUM(total_tokens), 0)
             FROM SQLUser.Usage
             WHERE production_name = ?
-        """
+            '''
         params = [self.name]
 
         agent_names = None
         if agents is not None:
             if not isinstance(agents, list):
-                raise TypeError("agents must be list[Agent] | None")
+                raise TypeError('agents must be list[Agent] | None')
             if any(not isinstance(agent, Agent) for agent in agents):
                 raise TypeError("all items in agents must be Agent objects")
 
             agent_names = [agent.name for agent in agents]
 
             if agent_names:
-                placeholders = ", ".join("?" for _ in agent_names)
-                sql += f" AND agent_name IN ({placeholders})"
+                placeholders = ', '.join('?' for _ in agent_names)
+                sql += f' AND agent_name IN ({placeholders})'
                 params.extend(agent_names)
 
         if model is not None:
-            sql += " AND model = ?"
+            sql += ' AND model = ?'
             params.append(model)
 
         if reasoning_effort is not None:
-            sql += " AND reasoning_effort = ?"
+            sql += ' AND reasoning_effort = ?'
             params.append(reasoning_effort)
 
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
 
         return {
-            "input_tokens": int(row[0] or 0),
-            "output_tokens": int(row[1] or 0),
-            "output_reasoning_tokens": int(row[2] or 0),
-            "total_tokens": int(row[3] or 0),
+            'input_tokens': int(row[0] or 0),
+            'output_tokens': int(row[1] or 0),
+            'output_reasoning_tokens': int(row[2] or 0),
+            'total_tokens': int(row[3] or 0),
         }
-
-    def create_models(self):
-
-        Message('LLMRequest', LLMRequest, 'Request')
-        Message('LLMResponse', LLMResponse, 'Response')
-        Message('LLMOutput', LLMOutput, 'Response')
-        Message('Request', Request, message_type='Request')
-        Message('Response', Response, 'Response')
 
     def initialize_OpenAI(self):
 
@@ -358,7 +346,11 @@ class Production:
         ensure_common_utils()
         ensure_production_utils()
         ensure_schema("ToolUsage", "Usage")
-        self.create_models()
+        Message('LLMRequest', LLMRequest, 'Request')
+        Message('LLMResponse', LLMResponse, 'Response')
+        Message('LLMOutput', LLMOutput, 'Response')
+        Message('Request', Request, message_type='Request')
+        Message('Response', Response, 'Response')
         self.initialize_OpenAI()
 
         prod_xml = f'''<Production Name="{self.name}" LogGeneralTraceEvents="false">
@@ -739,36 +731,36 @@ class Production:
                 }
             }
             '''
-        create_class("Agents.Admin", cls_text)
+        create_class('Agents.Admin', cls_text)
 
         # Set up Web App
 
         irispy = get_connection(True)
         sc = irispy.classMethodValue('Agents.Admin', 'EnsureWebApp', f'/csp/agents/{self.name}', 'Agents', f'Agents.REST.Dispatch.{self.name}')
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
         else:
             print(f'Created Web App successfully at /csp/agents/{self.name}')
 
         # Set up TLSConfig
 
-        sc = irispy.classMethodValue("Agents.Admin", "EnsureTLSConfigForOpenAI", "OpenAI")
+        sc = irispy.classMethodValue('Agents.Admin', 'EnsureTLSConfigForOpenAI', 'OpenAI')
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
         else:
-            print("Configured TLS profile 'OpenAI'")
+            print('Configured TLS profile \'OpenAI\'')
 
         # Set OpenAI API Key as Credential
 
         sc = irispy.classMethodValue(
-            "Agents.Admin",
-            "SetCredential",
-            "OPENAI_API_KEY",          # credential name
-            "OPENAI_API_KEY",          # username placeholder
+            'Agents.Admin',
+            'SetCredential',
+            'OPENAI_API_KEY',          # credential name
+            'OPENAI_API_KEY',          # username placeholder
             self.openai_api_key if self.openai_api_key else os.environ['OPENAI_API_KEY']
         )
         if sc != 1:
-            raise RuntimeError(irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+            raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
         else:
             print('Set OpenAI API Key Successfully!')
 
@@ -784,7 +776,7 @@ class Production:
     Tools: {toolkits if toolkits else 'No configured tools'}'''
 
     def cleanup(self):
-        """
+        '''
         Remove only production-owned artifacts.
 
         This removes:
@@ -798,40 +790,40 @@ class Production:
         - LLM/toolkit classes
         - agent-owned classes
         - TLS config / credentials
-        """
+        '''
         irispy = get_connection(True)
         errors = []
 
         web_app_path = f'/csp/agents/{self.name}'
         try:
-            sc = irispy.classMethodValue("Agents.Admin", "DeleteWebApp", web_app_path)
+            sc = irispy.classMethodValue('Agents.Admin', 'DeleteWebApp', web_app_path)
             if sc != 1:
                 errors.append(
-                    f"DeleteWebApp({web_app_path}) failed: "
-                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                    f'DeleteWebApp({web_app_path}) failed: '
+                    f'{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}'
                 )
         except Exception as e:
-            errors.append(f"DeleteWebApp({web_app_path}) raised: {e}")
+            errors.append(f'DeleteWebApp({web_app_path}) raised: {e}')
 
         try:
             sc = irispy.classMethodValue(
-                "Agents.Admin",
-                "DeleteClassIfExists",
-                f"Agents.REST.Dispatch.{self.name}"
+                'Agents.Admin',
+                'DeleteClassIfExists',
+                f'Agents.REST.Dispatch.{self.name}'
             )
             if sc != 1:
                 errors.append(
-                    f"DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) failed: "
-                    f"{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}"
+                    f'DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) failed: '
+                    f'{irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)}'
                 )
         except Exception as e:
-            errors.append(f"DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) raised: {e}")
+            errors.append(f'DeleteClassIfExists(Agents.REST.Dispatch.{self.name}) raised: {e}')
 
         if errors:
-            raise RuntimeError("Cleanup encountered errors:\n" + "\n".join(errors))
+            raise RuntimeError('Cleanup encountered errors:\n' + '\n'.join(errors))
 
     def delete(self):
-        """
+        '''
         Stop and delete the production class (User.<ProductionName>).
         This will NOT remove your agent/message classes.
 
@@ -841,50 +833,50 @@ class Production:
         - If DeleteProduction fails (often due to runtime state), attempts CleanProduction()
         and retries DeleteProduction once more.
         - Raises RuntimeError if final DeleteProduction still fails.
-        """
+        '''
         irispy = get_connection(True)
         prod_id = f'User.{self.name}'
 
         # 1) Try to stop the production (idempotent if already stopped)
-        sc = irispy.classMethodValue("Ens.Director", "StopProduction", 10, 1)
+        sc = irispy.classMethodValue('Ens.Director', 'StopProduction', 10, 1)
         if sc != 1:
             try:
-                print("StopProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc))
+                print('StopProduction:', irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
             except Exception:
-                print("StopProduction returned status", sc)
+                print('StopProduction returned status', sc)
 
         # 2) Try to delete the production
-        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
+        sc = irispy.classMethodValue('Ens.Director', 'DeleteProduction', prod_id, 0)
         if sc == 1:
-            print("Deleted production:", prod_id)
+            print('Deleted production:', prod_id)
             self.cleanup()
-            print(f"Cleaned up production-owned artifacts for: {self.name}")
+            print(f'Cleaned up production-owned artifacts for: {self.name}')
             return
 
         # 3) If delete failed, try a force path: CleanProduction then DeleteProduction
         #    (CleanProduction is destructive: it purges runtime state)
         try:
-            sc_clean = irispy.classMethodValue("Ens.Director", "CleanProduction", prod_id)
+            sc_clean = irispy.classMethodValue('Ens.Director', 'CleanProduction', prod_id)
             if sc_clean != 1:
                 try:
-                    print("CleanProduction:", irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc_clean))
+                    print('CleanProduction:', irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc_clean))
                 except Exception:
-                    print("CleanProduction returned status", sc_clean)
+                    print('CleanProduction returned status', sc_clean)
         except Exception as e:
             # If CleanProduction is not available or threw, log and continue to retry delete
-            print("CleanProduction attempt raised:", e)
+            print('CleanProduction attempt raised:', e)
 
         # Retry delete after cleaning
-        sc = irispy.classMethodValue("Ens.Director", "DeleteProduction", prod_id, 0)
+        sc = irispy.classMethodValue('Ens.Director', 'DeleteProduction', prod_id, 0)
         if sc == 1:
-            print("Deleted production after cleaning:", prod_id)
+            print('Deleted production after cleaning:', prod_id)
             self.cleanup()
-            print(f"Cleaned up production-owned artifacts for: {self.name}")
+            print(f'Cleaned up production-owned artifacts for: {self.name}')
             return
 
         # Final failure -> raise with readable error
         try:
-            errmsg = irispy.classMethodValue("%SYSTEM.Status", "GetErrorText", sc)
+            errmsg = irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc)
         except Exception:
-            errmsg = f"DeleteProduction returned status {sc}"
-        raise RuntimeError(f"DeleteProduction failed for {prod_id}: {errmsg}")
+            errmsg = f'DeleteProduction returned status {sc}'
+        raise RuntimeError(f'DeleteProduction failed for {prod_id}: {errmsg}')
