@@ -70,7 +70,7 @@ class Production:
                 COALESCE(SUM(output_tokens), 0),
                 COALESCE(SUM(output_reasoning_tokens), 0),
                 COALESCE(SUM(total_tokens), 0)
-            FROM SQLUser.Usage
+            FROM Agents.Usage
             WHERE production_name = ?
             '''
         params = [self.name]

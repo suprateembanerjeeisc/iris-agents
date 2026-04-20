@@ -7,7 +7,7 @@ load_dotenv()
 SCHEMA_DEFINITIONS = {
     'Prompt': {
         'create': '''
-            CREATE TABLE Prompt (
+            CREATE TABLE Agents.Prompt (
                 prompt_id VARCHAR(200) NOT NULL,
                 prompt_text VARCHAR(200) NOT NULL,
                 version INT NOT NULL,
@@ -17,7 +17,7 @@ SCHEMA_DEFINITIONS = {
     },
     'Agent': {
         'create': '''
-            CREATE TABLE Agent (
+            CREATE TABLE Agents.Agent (
                 agent_name VARCHAR(200) NOT NULL PRIMARY KEY,
                 description VARCHAR(4000),
                 system_prompt_id VARCHAR(200),
@@ -30,7 +30,7 @@ SCHEMA_DEFINITIONS = {
     },
     'AgentToolkit': {
         'create': '''
-            CREATE TABLE AgentToolkit (
+            CREATE TABLE Agents.AgentToolkit (
                 agent_name VARCHAR(200) NOT NULL,
                 toolkit_id VARCHAR(200) NOT NULL,
                 PRIMARY KEY (agent_name, toolkit_id)
@@ -39,7 +39,7 @@ SCHEMA_DEFINITIONS = {
     },
     'Toolkit': {
         "create": '''
-            CREATE TABLE Toolkit (
+            CREATE TABLE Agents.Toolkit (
                 toolkit_id VARCHAR(200) NOT NULL PRIMARY KEY,
                 toolkit_url VARCHAR(1000) NOT NULL
             )
@@ -47,7 +47,7 @@ SCHEMA_DEFINITIONS = {
     },
     'Chat': {
         'create': '''
-            CREATE TABLE Chat (
+            CREATE TABLE Agents.Chat (
                 message_id BIGINT IDENTITY PRIMARY KEY,
                 id VARCHAR(200) NOT NULL,
                 workflow VARCHAR(200),
@@ -58,13 +58,13 @@ SCHEMA_DEFINITIONS = {
             )
         ''',
         'indexes': [
-            'CREATE INDEX idx_chat_id_msgid ON Chat (id, message_id)',
-            'CREATE INDEX idx_chat_id_workflow_msgid ON Chat (id, workflow, message_id)',
+            'CREATE INDEX idx_chat_id_msgid ON Agents.Chat (id, message_id)',
+            'CREATE INDEX idx_chat_id_workflow_msgid ON Agents.Chat (id, workflow, message_id)',
         ],
     },
     'ToolUsage': {
         'create': '''
-            CREATE TABLE ToolUsage (
+            CREATE TABLE Agents.ToolUsage (
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
                 chat_id VARCHAR(200),
@@ -78,13 +78,13 @@ SCHEMA_DEFINITIONS = {
             )
         ''',
         'indexes': [
-            'CREATE INDEX idx_toolusage_chat_ts ON ToolUsage (chat_id, usage_ts)',
-            'CREATE INDEX idx_toolusage_chat_workflow_ts ON ToolUsage (chat_id, workflow, usage_ts)',
+            'CREATE INDEX idx_toolusage_chat_ts ON Agents.ToolUsage (chat_id, usage_ts)',
+            'CREATE INDEX idx_toolusage_chat_workflow_ts ON Agents.ToolUsage (chat_id, workflow, usage_ts)',
         ],
     },
     'Usage': {
         'create': '''
-            CREATE TABLE Usage (
+            CREATE TABLE Agents.Usage (
                 usage_id BIGINT IDENTITY PRIMARY KEY,
                 usage_ts TIMESTAMP NOT NULL,
                 chat_id VARCHAR(200),
@@ -105,12 +105,12 @@ SCHEMA_DEFINITIONS = {
             )
         ''',
         'indexes': [
-            'CREATE INDEX idx_usage_chat_ts ON Usage (chat_id, usage_ts)',
-            'CREATE INDEX idx_usage_chat_workflow_ts ON Usage (chat_id, workflow, usage_ts)',
-            'CREATE INDEX idx_usage_agent_ts ON Usage (agent_name, usage_ts)',
-            'CREATE INDEX idx_usage_prod_ts ON Usage (production_name, usage_ts)',
-            'CREATE INDEX idx_usage_model_ts ON Usage (model, usage_ts)',
-            'CREATE INDEX idx_usage_workflow_ts ON Usage (workflow, usage_ts)',
+            'CREATE INDEX idx_usage_chat_ts ON Agents.Usage (chat_id, usage_ts)',
+            'CREATE INDEX idx_usage_chat_workflow_ts ON Agents.Usage (chat_id, workflow, usage_ts)',
+            'CREATE INDEX idx_usage_agent_ts ON Agents.Usage (agent_name, usage_ts)',
+            'CREATE INDEX idx_usage_prod_ts ON Agents.Usage (production_name, usage_ts)',
+            'CREATE INDEX idx_usage_model_ts ON Agents.Usage (model, usage_ts)',
+            'CREATE INDEX idx_usage_workflow_ts ON Agents.Usage (workflow, usage_ts)',
         ],
     },
 }
@@ -151,7 +151,7 @@ def ensure_schema(*table_names: str) -> None:
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.Tables
         WHERE TABLE_TYPE='BASE TABLE'
-        AND TABLE_SCHEMA='SQLUser'
+        AND TABLE_SCHEMA='Agents'
         '''
     )
     existing_tables = {row[0] for row in cur.fetchall()}
@@ -178,7 +178,7 @@ def ensure_schema(*table_names: str) -> None:
                 conn.commit()
             except Exception:
                 pass
-    
+
 
 def get_connection(obj=False, namespace='Agents'):
     return connect(namespace, obj)
@@ -222,7 +222,7 @@ def ensure_common_utils():
             &sql(
                 SELECT TOP 1 reasoning_detailed
                 INTO :reasoningDetailed
-                FROM SQLUser.Chat
+                FROM Agents.Chat
                 WHERE id = :chatId
                 AND message_role = 'assistant'
                 AND reasoning_detailed IS NOT NULL
@@ -250,7 +250,7 @@ def ensure_common_utils():
             Set pMessageId = ""
             If $Get(chatId)="" Quit $$$OK
 
-            &sql(INSERT INTO SQLUser.Chat
+            &sql(INSERT INTO Agents.Chat
                 (id, workflow, message_role, message, reasoning_summary, reasoning_detailed)
                 VALUES
                 (:chatId, :workflow, :messageRole, :msg, :reasoningSummary, :reasoningDetailed))
@@ -374,7 +374,7 @@ def ensure_common_utils():
                 Quit sc
             }
 
-            &sql(INSERT INTO SQLUser.Usage
+            &sql(INSERT INTO Agents.Usage
             (usage_ts, chat_id, workflow, message_id, agent_name, production_name, model, reasoning_effort,
             input_tokens, output_tokens, total_tokens,
             input_cached_tokens, input_audio_tokens, output_audio_tokens,
@@ -536,7 +536,7 @@ def ensure_common_utils():
         {
             If $Get(chatId)="" Quit $$$OK
 
-            &sql(INSERT INTO SQLUser.Chat (id, workflow, message_role, message)
+            &sql(INSERT INTO Agents.Chat (id, workflow, message_role, message)
                 VALUES (:chatId, :workflow, :messageRole, :msg))
 
             If SQLCODE<0 Quit $$$ERROR($$$GeneralError,"Failed to append chat row")
@@ -585,7 +585,7 @@ def ensure_common_utils():
             Set req = $Extract($Get(pRequestPayload),1,200000)
             Set resp = $Extract($Get(pResponsePayload),1,200000)
 
-            &sql(INSERT INTO SQLUser.ToolUsage
+            &sql(INSERT INTO Agents.ToolUsage
                 (usage_ts, chat_id, workflow, agent_name, toolkit, tool_name, request_payload, response_ok, response_payload)
                 VALUES
                 (:ts, :pChatId, :pWorkflow, :pAgentName, :pToolkit, :pTool, :req, :pResponseOk, :resp))
@@ -866,7 +866,7 @@ def ensure_production_utils():
             If $Get(chatId)'="" {{
                 &sql(DECLARE c CURSOR FOR
                     SELECT message_role, message
-                    FROM SQLUser.Chat
+                    FROM Agents.Chat
                     WHERE id = :chatId
                     ORDER BY message_id)
 
@@ -931,7 +931,7 @@ def ensure_production_utils():
 
                 &sql(DECLARE c CURSOR FOR
                     SELECT message_role, message
-                    FROM SQLUser.Chat
+                    FROM Agents.Chat
                     WHERE id = :chatId
                     ORDER BY message_id)
 

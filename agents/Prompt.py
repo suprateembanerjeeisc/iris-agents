@@ -18,7 +18,7 @@ class Prompt:
         if version is None:
             cur.execute(
                 '''SELECT prompt_id, prompt_text, version
-                   FROM Prompt
+                   FROM Agents.Prompt
                    WHERE prompt_id = ?
                    ORDER BY version DESC''',
                 (name,),
@@ -26,7 +26,7 @@ class Prompt:
         else:
             cur.execute(
                 '''SELECT prompt_id, prompt_text, version
-                   FROM Prompt
+                   FROM Agents.Prompt
                    WHERE prompt_id = ? AND version = ?''',
                 (name, version),
             )
@@ -72,7 +72,7 @@ class Prompt:
 
         new_version = current_version + 1
         cur.execute(
-            '''INSERT INTO Prompt (prompt_id, prompt_text, version) VALUES (?, ?, ?)''',
+            'INSERT INTO Agents.Prompt (prompt_id, prompt_text, version) VALUES (?, ?, ?)',
             (name, text, new_version),
         )
         conn.commit()
@@ -124,7 +124,7 @@ class Prompt:
         conn = get_connection()
         cur = conn.cursor()
 
-        cur.execute('DELETE FROM Prompt WHERE prompt_id = ?', (self.name,))
+        cur.execute('DELETE FROM Agents.Prompt WHERE prompt_id = ?', (self.name,))
         conn.commit()
 
         self.text = None

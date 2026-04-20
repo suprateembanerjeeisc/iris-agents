@@ -44,7 +44,7 @@ class Agent:
                 response_format,
                 reasoning_effort,
                 persist_reasoning
-            FROM Agent
+            FROM Agents.Agent
             WHERE agent_name = ?
             ''',
             (name,),
@@ -68,7 +68,7 @@ class Agent:
             )
 
             cur.execute(
-                'SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?',
+                'SELECT toolkit_id FROM Agents.AgentToolkit WHERE agent_name = ?',
                 (self.name,),
             )
             toolkit_rows = cur.fetchall()
@@ -94,7 +94,7 @@ class Agent:
 
         if row is None:
             cur.execute(
-                '''INSERT INTO Agent
+                '''INSERT INTO Agents.Agent
                 (agent_name, description, system_prompt_id, model, response_format, reasoning_effort, persist_reasoning)
                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
                 (
@@ -110,7 +110,7 @@ class Agent:
             conn.commit()
         else:
             cur.execute(
-                '''UPDATE Agent SET
+                '''UPDATE Agents.Agent SET
                     description = ?,
                     system_prompt_id = ?,
                     model = ?,
@@ -130,7 +130,7 @@ class Agent:
             )
             conn.commit()
 
-            cur.execute('DELETE FROM AgentToolkit WHERE agent_name = ?', (name,))
+            cur.execute('DELETE FROM Agents.AgentToolkit WHERE agent_name = ?', (name,))
             conn.commit()
 
         self.name = name
@@ -183,7 +183,7 @@ class Agent:
                 COALESCE(SUM(output_tokens), 0),
                 COALESCE(SUM(output_reasoning_tokens), 0),
                 COALESCE(SUM(total_tokens), 0)
-            FROM SQLUser.Usage
+            FROM Agents.Usage
             WHERE agent_name = ?
         '''
         params: list[str] = [self.name]
@@ -809,7 +809,7 @@ class Agent:
         cur = conn.cursor()
 
         cur.execute(
-            'SELECT toolkit_id FROM AgentToolkit WHERE agent_name = ?',
+            'SELECT toolkit_id FROM Agents.AgentToolkit WHERE agent_name = ?',
             (self.name,),
         )
         db_existing_ids = {toolkit_id for (toolkit_id,) in cur.fetchall()}
@@ -827,7 +827,7 @@ class Agent:
                 continue
 
             cur.execute(
-                'INSERT INTO AgentToolkit (agent_name, toolkit_id) VALUES (?, ?)',
+                'INSERT INTO Agents.AgentToolkit (agent_name, toolkit_id) VALUES (?, ?)',
                 (self.name, toolkit_id),
             )
 
@@ -849,7 +849,7 @@ class Agent:
 
         for toolkit_id in toolkit_ids_to_remove:
             cur.execute(
-                'DELETE FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
+                'DELETE FROM Agents.AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
                 (self.name, toolkit_id),
             )
 
@@ -893,7 +893,7 @@ class Agent:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
-            'SELECT 1 FROM AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
+            'SELECT 1 FROM Agents.AgentToolkit WHERE agent_name = ? AND toolkit_id = ?',
             (self.name, toolkit_name),
         )
 
@@ -1184,14 +1184,14 @@ class Agent:
         Delete only agent-owned artifacts.
 
         This removes:
-        - Agent row from SQLUser.Agent
-        - AgentToolkit rows for this agent from SQLUser.AgentToolkit
+        - Agent row from Agents.Agent
+        - AgentToolkit rows for this agent from Agents.AgentToolkit
         - Gateway class: Agents.Gateway.<AgentName>Service
         - Process class: Agents.Process.<AgentName>
 
         This does NOT remove:
         - shared message classes
-        - toolkit definitions in SQLUser.Toolkit
+        - toolkit definitions in Agents.Toolkit
         - toolkit operation classes
         - shared utility classes
         - productions
@@ -1208,13 +1208,13 @@ class Agent:
 
         # Delete DB rows first
         try:
-            cur.execute('DELETE FROM AgentToolkit WHERE agent_name = ?', (self.name,))
+            cur.execute('DELETE FROM Agents.AgentToolkit WHERE agent_name = ?', (self.name,))
             conn.commit()
         except Exception as e:
             errors.append(f'DELETE AgentToolkit failed for {self.name}: {e}')
 
         try:
-            cur.execute('DELETE FROM Agent WHERE agent_name = ?', (self.name,))
+            cur.execute('DELETE FROM Agents.Agent WHERE agent_name = ?', (self.name,))
             conn.commit()
         except Exception as e:
             errors.append(f'DELETE Agent failed for {self.name}: {e}')
@@ -1258,5 +1258,5 @@ class Agent:
         ensure_schema('Agent')
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute('SELECT 1 FROM Agent WHERE agent_name = ?', (self.name,))
+        cur.execute('SELECT 1 FROM Agents.Agent WHERE agent_name = ?', (self.name,))
         return cur.fetchone() is not None

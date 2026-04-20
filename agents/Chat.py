@@ -19,7 +19,7 @@ class Chat:
         cur = conn.cursor()
 
         if messages is not None:
-            delete_sql = 'DELETE FROM Chat WHERE id = ?'
+            delete_sql = 'DELETE FROM Agents.Chat WHERE id = ?'
             delete_params: list[str] = [self.id]
 
             if self.workflow:
@@ -36,7 +36,7 @@ class Chat:
                     raise KeyError('Each message must be {\'role\': ..., \'content\': ...}')
 
                 cur.execute(
-                    'INSERT INTO Chat (id, workflow, message_role, message) VALUES (?, ?, ?, ?)',
+                    'INSERT INTO Agents.Chat (id, workflow, message_role, message) VALUES (?, ?, ?, ?)',
                     (self.id, self.workflow, message_role, content),
                 )
             conn.commit()
@@ -47,7 +47,7 @@ class Chat:
 
         select_sql = f'''
             SELECT TOP {limit} message_role, message
-            FROM SQLUser.Chat
+            FROM Agents.Chat
             WHERE id = ?
         '''
         select_params: list[str] = [self.id]
@@ -87,7 +87,7 @@ class Chat:
                 COALESCE(SUM(output_tokens), 0) AS output_tokens,
                 COALESCE(SUM(output_reasoning_tokens), 0) AS output_reasoning_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens
-            FROM SQLUser.Usage
+            FROM Agents.Usage
             WHERE chat_id = ?
         '''
         params: list[str] = [self.id]
@@ -124,7 +124,7 @@ class Chat:
 
         cur.execute(
             '''
-            INSERT INTO Chat (id, workflow, message_role, message, reasoning_summary, reasoning_detailed)
+            INSERT INTO Agents.Chat (id, workflow, message_role, message, reasoning_summary, reasoning_detailed)
             VALUES (?, ?, ?, ?, ?, ?)
             ''',
             (self.id, workflow_value, role, content, reasoning_summary, reasoning_detailed),

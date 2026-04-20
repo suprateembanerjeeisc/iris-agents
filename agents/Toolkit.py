@@ -20,7 +20,7 @@ class Toolkit:
 
         # Fetch existing
         cur.execute(
-            'SELECT toolkit_url FROM Toolkit WHERE toolkit_id = ?',
+            'SELECT toolkit_url FROM Agents.Toolkit WHERE toolkit_id = ?',
             (name,)
         )
         row = cur.fetchone()
@@ -37,7 +37,7 @@ class Toolkit:
             existing_url = row[0]
             if existing_url != url:
                 cur.execute(
-                    'UPDATE Toolkit SET toolkit_url = ? WHERE toolkit_id = ?',
+                    'UPDATE Agents.Toolkit SET toolkit_url = ? WHERE toolkit_id = ?',
                     (url, name)
                 )
                 conn.commit()
@@ -45,7 +45,7 @@ class Toolkit:
             self.url = url
         else:
             cur.execute(
-                'INSERT INTO Toolkit (toolkit_id, toolkit_url) VALUES (?, ?)',
+                'INSERT INTO Agents.Toolkit (toolkit_id, toolkit_url) VALUES (?, ?)',
                 (name, url)
             )
             conn.commit()
