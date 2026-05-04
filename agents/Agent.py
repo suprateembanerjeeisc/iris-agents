@@ -3,10 +3,10 @@ import iris
 from pydantic import BaseModel
 
 from .utils import create_class, ensure_agents_namespace, ensure_schema, get_connection
-from .Toolkit import Toolkit
-from .Prompt import Prompt
-from .Message import Message
-from .Chat import Chat
+from .toolkit import Toolkit
+from .prompt import Prompt
+from .message import Message
+from .chat import Chat
 
 
 class Agent:

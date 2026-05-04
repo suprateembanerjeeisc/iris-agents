@@ -1,6 +1,6 @@
 from .utils import create_class, ensure_agents_namespace, ensure_common_utils, ensure_schema, get_connection
 from .models import ToolRequest, ToolResponse
-from .Message import Message
+from .message import Message
 import time
 from urllib.parse import urlparse
 
@@ -53,6 +53,9 @@ class Toolkit:
             should_rebuild_runtime = True
 
         self.ensure_runtime_classes(force=should_rebuild_runtime)
+
+    def __repr__(self) -> str:
+        return f'Toolkit(name={self.name!r}, url={self.url!r})'
 
     def ensure_runtime_classes(self, force: bool = False) -> None:
         irispy = get_connection(True)

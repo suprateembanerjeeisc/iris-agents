@@ -74,7 +74,7 @@ class Chat:
             raise TypeError('workflow must be str | None')
         return workflow.strip()
 
-    def usage(self, workflow: str | None = None) -> str:
+    def usage(self, workflow: str | None = None) -> dict[str, int]:
         ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
@@ -107,7 +107,7 @@ class Chat:
             'total_tokens': int(row[3] or 0),
         }
 
-        return json.dumps(result)
+        return result
 
     def append(
         self,

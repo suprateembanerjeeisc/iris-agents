@@ -2,8 +2,8 @@ from dotenv import load_dotenv
 import iris
 import os
 
-from .Message import Message
-from .Agent import Agent
+from .message import Message
+from .agent import Agent
 from .models import LLMRequest, LLMResponse, Request, Response, LLMOutput
 from .utils import create_class, ensure_agents_namespace, ensure_common_utils, ensure_production_utils, ensure_schema, get_connection
 
