@@ -172,7 +172,7 @@ class Agent:
         '''
         create_class(f'Agents.Gateway.{self.name}Service', cls_text)
 
-    def usage(self, workflow: str | None = None) -> dict:
+    def usage(self) -> dict:
         ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
@@ -187,11 +187,6 @@ class Agent:
             WHERE agent_name = ?
         '''
         params: list[str] = [self.name]
-        workflow_value = self._normalize_workflow(workflow)
-
-        if workflow_value:
-            sql += ' AND workflow = ?'
-            params.append(workflow_value)
 
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
@@ -361,7 +356,6 @@ class Agent:
             Set tPersistReasoning = {persist_reasoning_int}
 
             Set tChatId = pRequest.ChatId
-            Set tWorkflow = pRequest.Workflow
             Set tUserMessage = pRequest.Message
             Set tResponseType = pRequest.ResponseType
             If tResponseType="" {{
@@ -384,8 +378,7 @@ class Agent:
                     Set sc = ##class(Agents.Utils.Common).AppendChat(
                         tChatId,
                         "user",
-                        tUserMessage,
-                        tWorkflow
+                        tUserMessage
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
@@ -512,8 +505,7 @@ class Agent:
                         Set sc = ##class(Agents.Utils.Common).AppendChat(
                             tChatId,
                             "assistant",
-                            tToolRequestJSON,
-                            tWorkflow
+                            tToolRequestJSON
                         )
                         {'$$$LOGSTATUS(sc)' if self.debug else ''}
                         If $$$ISERR(sc) {{
@@ -559,8 +551,7 @@ class Agent:
                         Set sc = ##class(Agents.Utils.Common).AppendChat(
                             tChatId,
                             "developer",
-                            tToolChatMessage,
-                            tWorkflow
+                            tToolChatMessage
                         )
                         {'$$$LOGSTATUS(sc)' if self.debug else ''}
                         If $$$ISERR(sc) {{
@@ -586,8 +577,7 @@ class Agent:
                             tLLMResp.Tool,
                             ##class(Agents.Utils.Common).ToJSONString(tLLMResp.Content),
                             +tToolResp.OkGet(),
-                            ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet()),
-                            tWorkflow
+                            ##class(Agents.Utils.Common).ToJSONString(tToolResp.ResultGet())
                         )
                         {'$$$LOGSTATUS(sc)' if self.debug else ''}
                         If $$$ISERR(sc) {{
@@ -737,7 +727,6 @@ class Agent:
                         tFinalJSON,
                         tStoredReasoningSummary,
                         tStoredReasoningDetailed,
-                        tWorkflow,
                         .tAssistantMessageId
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
@@ -764,8 +753,7 @@ class Agent:
                         ##class(Agents.Utils.Common).GetRunningProductionName(),
                         "{self.model}",
                         tReasoningEffort,
-                        oneUsage,
-                        tWorkflow
+                        oneUsage
                     )
                     {'$$$LOGSTATUS(sc)' if self.debug else ''}
                     If $$$ISERR(sc) {{
@@ -870,19 +858,6 @@ class Agent:
             return ''
         raise TypeError('chat must be Chat | str | None')
 
-    @staticmethod
-    def _normalize_workflow(
-        workflow: str | None,
-        chat: Chat | str | None = None,
-    ) -> str:
-        if workflow is None and isinstance(chat, Chat):
-            workflow = chat.workflow
-        if workflow is None:
-            return ''
-        if not isinstance(workflow, str):
-            raise TypeError('workflow must be str | None')
-        return workflow.strip()
-
     def _get_attached_toolkit(self, toolkit: str | Toolkit) -> Toolkit:
         toolkit_name = toolkit.name if isinstance(toolkit, Toolkit) else str(toolkit)
         toolkit_name = toolkit_name.strip()
@@ -975,7 +950,6 @@ class Agent:
         tool: str,
         params: dict | str | None = None,
         chat: Chat | str | None = None,
-        workflow: str | None = None,
     ):
         if not self.exists():
             raise KeyError(f"No Agent found for '{self.name}'")
@@ -985,7 +959,6 @@ class Agent:
             raise ValueError('tool must be a non-empty string')
 
         chat_id = self._normalize_chat_id(chat)
-        workflow_id = self._normalize_workflow(workflow, chat)
         toolkit_obj = self._get_attached_toolkit(toolkit)
 
         toolkit_obj.ensure_runtime_classes()
@@ -1021,7 +994,6 @@ class Agent:
             request_payload,
             response_ok,
             response_payload,
-            workflow_id,
         )
         if sc != 1:
             raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
@@ -1040,7 +1012,6 @@ class Agent:
                 chat_id,
                 'developer',
                 tool_chat_payload,
-                workflow_id,
             )
             if sc != 1:
                 raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
@@ -1053,7 +1024,6 @@ class Agent:
         chat: Chat | str | None = None,
         response_format: BaseModel | None = None,
         reasoning_effort: str | None = None,
-        workflow: str | None = None,
     ) -> str:
         
         if not self.exists():
@@ -1097,12 +1067,10 @@ class Agent:
             raise ValueError('Provide message=...')
 
         chat_id = self._normalize_chat_id(chat)
-        workflow_id = self._normalize_workflow(workflow, chat)
 
         payload = {
             'message': message,
             'chatId': chat_id,
-            'workflow': workflow_id,
             'responseType': (
                 f'Agents.Message.{effective_response_format.name}'
                 if effective_response_format

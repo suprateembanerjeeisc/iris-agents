@@ -41,7 +41,6 @@ class ToolResponse(BaseModel):
 
 class Request(BaseModel):
     chatId: str = 'default'
-    workflow: str = ''
     message: str
     responseType: str = 'Agents.Message.Response'
     reasoningEffort: str = 'medium'

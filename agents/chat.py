@@ -8,11 +8,9 @@ class Chat:
         name: str,
         messages: list[dict[str, str]] | None = None,
         limit: int = 200,
-        workflow: str | None = None,
     ):
 
         self.id = str(name)
-        self.workflow = self._normalize_workflow(workflow)
         ensure_schema('Chat')
 
         conn = get_connection()
@@ -21,10 +19,6 @@ class Chat:
         if messages is not None:
             delete_sql = 'DELETE FROM Agents.Chat WHERE id = ?'
             delete_params: list[str] = [self.id]
-
-            if self.workflow:
-                delete_sql += ' AND workflow = ?'
-                delete_params.append(self.workflow)
 
             cur.execute(delete_sql, tuple(delete_params))
             conn.commit()
@@ -36,8 +30,8 @@ class Chat:
                     raise KeyError('Each message must be {\'role\': ..., \'content\': ...}')
 
                 cur.execute(
-                    'INSERT INTO Agents.Chat (id, workflow, message_role, message) VALUES (?, ?, ?, ?)',
-                    (self.id, self.workflow, message_role, content),
+                    'INSERT INTO Agents.Chat (id, message_role, message) VALUES (?, ?, ?)',
+                    (self.id, message_role, content),
                 )
             conn.commit()
 
@@ -49,16 +43,9 @@ class Chat:
             SELECT TOP {limit} message_role, message
             FROM Agents.Chat
             WHERE id = ?
-        '''
-        select_params: list[str] = [self.id]
-
-        if self.workflow:
-            select_sql += ' AND workflow = ?'
-            select_params.append(self.workflow)
-
-        select_sql += '''
             ORDER BY message_id DESC
         '''
+        select_params: list[str] = [self.id]
 
         cur.execute(select_sql, tuple(select_params))
         rows = list(cur.fetchall())
@@ -66,20 +53,10 @@ class Chat:
 
         self.messages = [{'role': row[0], 'content': row[1]} for row in rows]
 
-    @staticmethod
-    def _normalize_workflow(workflow: str | None) -> str:
-        if workflow is None:
-            return ''
-        if not isinstance(workflow, str):
-            raise TypeError('workflow must be str | None')
-        return workflow.strip()
-
-    def usage(self, workflow: str | None = None) -> dict[str, int]:
+    def usage(self) -> dict[str, int]:
         ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
-
-        workflow_value = self.workflow if workflow is None else self._normalize_workflow(workflow)
 
         sql = '''
             SELECT
@@ -91,10 +68,6 @@ class Chat:
             WHERE chat_id = ?
         '''
         params: list[str] = [self.id]
-
-        if workflow_value:
-            sql += ' AND workflow = ?'
-            params.append(workflow_value)
 
         cur.execute(sql, tuple(params))
 
@@ -115,37 +88,31 @@ class Chat:
         content: str,
         reasoning_summary: str = '',
         reasoning_detailed: str = '',
-        workflow: str | None = None,
     ) -> None:
         conn = get_connection()
         cur = conn.cursor()
 
-        workflow_value = self.workflow if workflow is None else self._normalize_workflow(workflow)
-
         cur.execute(
             '''
-            INSERT INTO Agents.Chat (id, workflow, message_role, message, reasoning_summary, reasoning_detailed)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO Agents.Chat (id, message_role, message, reasoning_summary, reasoning_detailed)
+            VALUES (?, ?, ?, ?, ?)
             ''',
-            (self.id, workflow_value, role, content, reasoning_summary, reasoning_detailed),
+            (self.id, role, content, reasoning_summary, reasoning_detailed),
         )
         conn.commit()
 
-        if not self.workflow or workflow_value == self.workflow:
-            self.messages.append({'role': role, 'content': content})
+        self.messages.append({'role': role, 'content': content})
 
     def to_json(self) -> str:
         return json.dumps(self.messages, ensure_ascii=False)
 
     def __repr__(self) -> str:
-        workflow = f', workflow={self.workflow!r}' if self.workflow else ''
-        return f'Chat(name={self.id!r}{workflow}, messages={len(self.messages)})'
+        return f'Chat(name={self.id!r}, messages={len(self.messages)})'
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Chat):
             return NotImplemented
         return (
             self.id == other.id
-            and self.workflow == other.workflow
             and self.messages == other.messages
         )

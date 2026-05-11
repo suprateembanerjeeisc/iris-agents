@@ -58,8 +58,7 @@ class Production:
     def usage(self,
               agents: list[Agent] | None = None,
               model: str | None = None,
-              reasoning_effort: str | None = None,
-              workflow: str | None = None) -> dict:
+              reasoning_effort: str | None = None) -> dict:
         ensure_schema('Usage')
         conn = get_connection()
         cur = conn.cursor()
@@ -96,14 +95,6 @@ class Production:
         if reasoning_effort is not None:
             sql += ' AND reasoning_effort = ?'
             params.append(reasoning_effort)
-
-        if workflow is not None:
-            if not isinstance(workflow, str):
-                raise TypeError('workflow must be str | None')
-            workflow_value = workflow.strip()
-            if workflow_value:
-                sql += ' AND workflow = ?'
-                params.append(workflow_value)
 
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
