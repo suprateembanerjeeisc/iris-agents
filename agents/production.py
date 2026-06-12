@@ -121,9 +121,6 @@ class Production:
 
         ClassMethod PostResponses(model As %String, inputJson As %String, reasoningDetailedJson As %String, apiKey As %String, responseType As %String, reasoningEffort As %String, Output pDurationMs As %BigInt = "") As %String
         {{
-            Set contentSchema = ##class(Agents.Utils.Production).BuildContentSchema(responseType)
-            Set contentSchemaText = contentSchema.%ToJSON()
-
             Set mergedInputJson = ##class(Agents.Utils.Production).MergeOutputWithReasoningDetailed(
                 inputJson,
                 reasoningDetailedJson
@@ -137,10 +134,9 @@ class Production:
 
             Set sys = ##class(%DynamicObject).%New()
             Do sys.%Set("role", "system")
-            Do sys.%Set("content", "Return JSON with exactly these fields: IsTool, Toolkit, Tool, Content. "_
-                "If IsTool is false, Content must be a JSON string whose parsed value conforms exactly to this schema: "_contentSchemaText_" "_
-                "If IsTool is true, Content must be a JSON string of tool parameters. "_
-                "Toolkit and Tool must be empty strings when IsTool is false.")
+            Do sys.%Set("content", "Return JSON with exactly these fields: IsTool, Toolkit, Tool, ToolArgs, Content. "_
+                "If IsTool is false, populate Content as an object conforming to its schema, set Toolkit, Tool and ToolArgs to empty strings. "_
+                "If IsTool is true, set ToolArgs to a JSON string of tool parameters and leave Content empty.")
             Do finalInput.%Push(sys)
 
             For i=0:1:originalInput.%Size()-1 {{
@@ -181,7 +177,7 @@ class Production:
             Do fmt.%Set("type", "json_schema")
             Do fmt.%Set("name", "LLMOutput")
             Do fmt.%Set("strict", 1)
-            Do fmt.%Set("schema", ##class(Agents.Utils.Production).BuildLLMOutputSchema())
+            Do fmt.%Set("schema", ##class(Agents.Utils.Production).BuildLLMOutputSchema(responseType))
 
             Set text = ##class(%DynamicObject).%New()
             Do text.%Set("format", fmt)
@@ -328,7 +324,15 @@ class Production:
                 Set pResponse.IsTool = +obj.%Get("IsTool")
                 Set pResponse.Toolkit = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Toolkit"))
                 Set pResponse.Tool = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Tool"))
-                Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
+                // On tool turns the Process reads parameters from Content; on answer
+                // turns it expects the answer JSON. Content is now a strict object, so
+                // serialize it to text here (no model-side escaping). ToolArgs carries
+                // the tool-parameter string.
+                If pResponse.IsTool {{
+                    Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("ToolArgs"))
+                }} Else {{
+                    Set pResponse.Content = ##class(Agents.Utils.Common).ToJSONString(obj.%Get("Content"))
+                }}
                 Set pResponse.Usage = usageJSON
                 Set pResponse.ReasoningSummary = reasoningSummary
                 Set pResponse.ReasoningDetailed = reasoningDetailed

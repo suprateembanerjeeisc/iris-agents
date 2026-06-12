@@ -9,7 +9,7 @@ SCHEMA_DEFINITIONS = {
         'create': '''
             CREATE TABLE Agents.Prompt (
                 prompt_id VARCHAR(200) NOT NULL,
-                prompt_text VARCHAR(200) NOT NULL,
+                prompt_text VARCHAR(50000) NOT NULL,
                 version INT NOT NULL,
                 PRIMARY KEY (prompt_id, version)
             )
@@ -1072,7 +1072,7 @@ def ensure_production_utils():
             Quit schema
         }}
 
-        ClassMethod BuildLLMOutputSchema() As %DynamicObject
+        ClassMethod BuildLLMOutputSchema(pResponseType As %String = "") As %DynamicObject
         {{
             Set schema = ##class(%DynamicObject).%New()
             Do schema.%Set("type","object")
@@ -1081,12 +1081,20 @@ def ensure_production_utils():
             Do props.%Set("IsTool", ##class(%DynamicObject).%New().%Set("type","boolean"))
             Do props.%Set("Toolkit", ##class(%DynamicObject).%New().%Set("type","string"))
             Do props.%Set("Tool", ##class(%DynamicObject).%New().%Set("type","string"))
-            Do props.%Set("Content", ##class(%DynamicObject).%New().%Set("type","string"))
+            Do props.%Set("ToolArgs", ##class(%DynamicObject).%New().%Set("type","string"))
+
+            // Content is the schema-enforced answer object (not a stringified JSON
+            // document). Letting strict structured output guarantee its shape removes
+            // the need for the model to hand-escape JSON into a string - the source of
+            // "Parsing error" crashes on text-heavy responses. Tool parameters live in
+            // ToolArgs instead, keeping the response object clean on answer turns.
+            Do props.%Set("Content", ..BuildContentSchema(pResponseType))
 
             Set req = ##class(%DynamicArray).%New()
             Do req.%Push("IsTool")
             Do req.%Push("Toolkit")
             Do req.%Push("Tool")
+            Do req.%Push("ToolArgs")
             Do req.%Push("Content")
 
             Do schema.%Set("properties", props)

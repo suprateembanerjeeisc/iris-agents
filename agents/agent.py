@@ -204,8 +204,26 @@ class Agent:
         else:
             default_response_cls = 'Agents.Message.Response'
 
+        # Encode the system prompt as an ObjectScript string-literal expression. OSC
+        # escaping differs from JSON: quotes are doubled ("" not \"), and control chars
+        # can't appear literally in source, so they become $C(n) concatenated between
+        # printable runs (chunked to keep source lines short). e.g. "abc"_$C(10)_"de""f"
         system_prompt_text = self.system_prompt.text if self.system_prompt else ''
-        system_prompt_json = json.dumps(system_prompt_text or '')
+        system_prompt_tokens = []
+        printable_run = ''
+        for char in system_prompt_text or '':
+            if ord(char) < 32 or ord(char) == 127:
+                if printable_run:
+                    system_prompt_tokens += [f'"{printable_run[i:i+200].replace(chr(34), chr(34)*2)}"'
+                                             for i in range(0, len(printable_run), 200)]
+                    printable_run = ''
+                system_prompt_tokens.append(f'$C({ord(char)})')
+            else:
+                printable_run += char
+        if printable_run:
+            system_prompt_tokens += [f'"{printable_run[i:i+200].replace(chr(34), chr(34)*2)}"'
+                                     for i in range(0, len(printable_run), 200)]
+        system_prompt_expr = '_'.join(system_prompt_tokens) or '""'
         persist_reasoning_int = 1 if self.persist_reasoning else 0
 
         toolkit_manifest_blocks = ''
@@ -285,7 +303,7 @@ class Agent:
 
         ClassMethod GetSystemPrompt() As %String
         {{
-            Quit {system_prompt_json}
+            Quit {system_prompt_expr}
         }}
 
         Method InvokeTool(
@@ -1108,6 +1126,57 @@ class Agent:
             raise RuntimeError(irispy.classMethodValue('%SYSTEM.Status', 'GetErrorText', sc))
 
         raw = out_ref.getValue()
+
+        # %JSON.Adaptor drops empty values on export (an empty list/string/object,
+        # a zero, a false), which makes the JSON fail schema validation downstream
+        # even though the model returned a complete object. Re-add any field the
+        # export dropped, using a type-correct empty default, by walking the
+        # response class's compiled properties. Recurses through nested message
+        # classes and lists of them.
+        def _complete(node, cls_name):
+            if not isinstance(node, dict):
+                return node
+            cls = irispy.classMethodObject('%Dictionary.CompiledClass', '%OpenId', cls_name)
+            if cls is None:
+                return node
+            props = cls.get('Properties')
+            for i in range(1, props.invoke('Count') + 1):
+                prop = props.invoke('GetAt', i)
+                name = prop.get('Name')
+                if name.startswith('%'):
+                    continue
+                params = prop.get('Parameters')
+                json_name = (params.invoke('GetAt', '%JSONFIELDNAME') or name) if params else name
+                prop_type = prop.get('Type') or ''
+                collection = prop.get('Collection') or ''
+                nested = prop_type.startswith('Agents.Message.')
+                if collection == 'list':
+                    if json_name not in node:
+                        node[json_name] = []
+                    elif nested and isinstance(node[json_name], list):
+                        node[json_name] = [_complete(item, prop_type) for item in node[json_name]]
+                elif collection == 'array':
+                    if json_name not in node:
+                        node[json_name] = {}
+                elif nested:
+                    node[json_name] = _complete(node.get(json_name) or {}, prop_type)
+                elif json_name not in node:
+                    upper = prop_type.upper()
+                    if ('INTEGER' in upper) or ('BIGINT' in upper):
+                        node[json_name] = 0
+                    elif 'BOOLEAN' in upper:
+                        node[json_name] = False
+                    elif ('DOUBLE' in upper) or ('NUMERIC' in upper) or ('FLOAT' in upper) or ('DECIMAL' in upper):
+                        node[json_name] = 0
+                    else:
+                        node[json_name] = ''
+            return node
+
+        if effective_response_format is not None:
+            try:
+                raw = json.dumps(_complete(json.loads(raw), f'Agents.Message.{effective_response_format.name}'))
+            except json.JSONDecodeError:
+                pass
 
         try:
             data = json.loads(raw)
